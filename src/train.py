@@ -1,3 +1,4 @@
+
 import argparse
 import json
 import os
@@ -9,6 +10,9 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
+from torch.utils.data import DataLoader
+from src.datasets.npz_classification import NpzClassificationDataset
 
 
 @dataclass
@@ -128,6 +132,7 @@ def main() -> None:
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--exp", default=None, help="experiment config json (overrides defaults)")
+    ap.add_argument("--dataset", default=None, help="dataset name under data_dir (expects processed/train.npz)")
     args = ap.parse_args()
     # experiment config (json) 적용: exp 파일 값으로 args를 덮어씀
     if args.exp:
@@ -181,8 +186,29 @@ def main() -> None:
     print("[env] cuda available:", cuda_available)
     print("[env] device:", device_name)
 
+    # dataset 로드 (있으면 사용, 없으면 랜덤 데이터 fallback)
+    train_loader = None
+    input_dim = 1024
+    num_classes = 10
+
+    if args.dataset:
+        train_npz = data_dir / args.dataset / "processed" / "train.npz"
+        if train_npz.exists():
+            ds = NpzClassificationDataset(train_npz)
+            input_dim = ds.input_dim
+            num_classes = ds.num_classes
+            train_loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
+            print(f"[data] loaded: {train_npz} (N={len(ds)}, D={input_dim}, C={num_classes})")
+        else:
+            print(f"[data] not found: {train_npz}. fallback to random data.")
+
+
+
+
+
     # 더미 학습 루프 (체크포인트/재시작 동작 검증용)
-    model = build_dummy_model().to(device)
+    model = build_dummy_model(input_dim=input_dim, out_dim=num_classes).to(device)
+
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
 
@@ -196,10 +222,22 @@ def main() -> None:
         for epoch in range(start_epoch, args.epochs):
             model.train()
             running_loss = 0.0
+                it = iter(train_loader) if train_loader is not None else None
+
 
             for _ in range(args.steps_per_epoch):
-                x = torch.randn(args.batch_size, 1024, device=device)
-                y = torch.randint(0, 10, (args.batch_size,), device=device)
+               if train_loader is None:
+                   x = torch.randn(args.batch_size, input_dim, device=device)
+                   y = torch.randint(0, num_classes, (args.batch_size,), device=device)
+               else:
+                   try:
+                      x_cpu, y_cpu = next(it)
+                   except StopIteration:
+                       it = iter(train_loader)
+                       x_cpu, y_cpu = next(it)
+                   x = x_cpu.to(device, non_blocking=True)
+                   y = y_cpu.to(device, non_blocking=True)
+
 
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(x)
