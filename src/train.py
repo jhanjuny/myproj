@@ -218,6 +218,7 @@ def main() -> None:
     if args.resume:
         start_epoch, global_step = load_checkpoint(run_dir, model, optimizer)
 
+    epoch = start_epoch
     try:
         for epoch in range(start_epoch, args.epochs):
             model.train()
@@ -248,10 +249,6 @@ def main() -> None:
 
             avg = running_loss / max(1, args.steps_per_epoch)
             print(f"[train] epoch={epoch} step={global_step} loss={avg:.6f}")
-
-            save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
-
-        print("[done] training finished.")
 
             # 매 epoch마다 항상 최신 체크포인트 저장
             save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
