@@ -20,3 +20,6 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+
+# local machine overrides (DO NOT COMMIT)
+configs/paths.local.json
