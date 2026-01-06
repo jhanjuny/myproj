@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from torch.utils.data import DataLoader
-from src.datasets.npz_classification import NpzClassificationDataset
+from datasets.npz_classification import NpzClassificationDataset
 
 
 @dataclass
@@ -222,22 +222,20 @@ def main() -> None:
         for epoch in range(start_epoch, args.epochs):
             model.train()
             running_loss = 0.0
-                it = iter(train_loader) if train_loader is not None else None
-
+            it = iter(train_loader) if train_loader is not None else None
 
             for _ in range(args.steps_per_epoch):
-               if train_loader is None:
-                   x = torch.randn(args.batch_size, input_dim, device=device)
-                   y = torch.randint(0, num_classes, (args.batch_size,), device=device)
-               else:
-                   try:
-                      x_cpu, y_cpu = next(it)
-                   except StopIteration:
-                       it = iter(train_loader)
-                       x_cpu, y_cpu = next(it)
-                   x = x_cpu.to(device, non_blocking=True)
-                   y = y_cpu.to(device, non_blocking=True)
-
+                if train_loader is None:
+                    x = torch.randn(args.batch_size, input_dim, device=device)
+                    y = torch.randint(0, num_classes, (args.batch_size,), device=device)
+                else:
+                    try:
+                        x_cpu, y_cpu = next(it)
+                    except StopIteration:
+                        it = iter(train_loader)
+                        x_cpu, y_cpu = next(it)
+                    x = x_cpu.to(device, non_blocking=True)
+                    y = y_cpu.to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
                 logits = model(x)
@@ -250,6 +248,10 @@ def main() -> None:
 
             avg = running_loss / max(1, args.steps_per_epoch)
             print(f"[train] epoch={epoch} step={global_step} loss={avg:.6f}")
+
+            save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
+
+        print("[done] training finished.")
 
             # 매 epoch마다 항상 최신 체크포인트 저장
             save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
