@@ -127,7 +127,17 @@ def main() -> None:
     ap.add_argument("--steps_per_epoch", type=int, default=50)
     ap.add_argument("--batch_size", type=int, default=64)
     ap.add_argument("--lr", type=float, default=1e-3)
+    ap.add_argument("--exp", default=None, help="experiment config json (overrides defaults)")
     args = ap.parse_args()
+        # experiment config (json) 적용: exp 파일 값으로 args를 덮어씀
+    if args.exp:
+        exp_path = Path(args.exp)
+        exp_cfg = json.loads(exp_path.read_text(encoding="utf-8"))
+        for k, v in exp_cfg.items():
+            if hasattr(args, k):
+                setattr(args, k, v)
+
+
 
     # paths.json 로드
     paths_path = Path(args.paths)
@@ -161,6 +171,8 @@ def main() -> None:
         paths=paths,
     )
     save_json(run_dir / "run_info.json", asdict(info))
+    save_json(run_dir / "args_effective.json", vars(args))
+    
 
     print("[env] data_dir:", str(data_dir))
     print("[env] outputs_dir:", str(outputs_dir))
