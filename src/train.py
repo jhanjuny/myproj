@@ -129,7 +129,7 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--exp", default=None, help="experiment config json (overrides defaults)")
     args = ap.parse_args()
-        # experiment config (json) 적용: exp 파일 값으로 args를 덮어씀
+    # experiment config (json) 적용: exp 파일 값으로 args를 덮어씀
     if args.exp:
         exp_path = Path(args.exp)
         exp_cfg = json.loads(exp_path.read_text(encoding="utf-8"))
