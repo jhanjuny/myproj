@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+.env
+
+# VS Code / Cursor
+.vscode/
+.cursor/
+
+# Outputs / data
+outputs/
+*.ckpt
+*.pth
+*.pt
+
+# OS
+.DS_Store
+Thumbs.db
