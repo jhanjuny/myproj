@@ -293,9 +293,14 @@ def main() -> None:
         start_epoch, global_step = load_checkpoint(run_dir, model, optimizer)
 
 
+    # ---- resume 상태 확인용 (권장) ----
+    print(f"[resume] start_epoch={start_epoch}, global_step={global_step}")
+
+    # 루프가 0번 돌 수도 있으니 사전 초기화
     epoch = start_epoch
-    start_epoch = 0
-    global_step = 0    
+    avg = None
+    val_acc = None
+  
     try:
         for epoch in range(start_epoch, args.epochs):
             model.train()
