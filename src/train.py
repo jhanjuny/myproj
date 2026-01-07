@@ -92,18 +92,22 @@ def find_latest_run_dir(outputs_dir: Path) -> Path | None:
     return runs[0] if runs else None
 
 
-def save_checkpoint(run_dir: Path, epoch: int, step: int, model: nn.Module, optimizer: optim.Optimizer) -> None:
+
+def save_checkpoint(run_dir: Path, epoch_next: int, step: int, model: nn.Module, optimizer: optim.Optimizer) -> None:
     ckpt = {
-        "epoch": epoch,
+        "epoch_next": epoch_next,
         "step": step,
         "model": model.state_dict(),
         "optimizer": optimizer.state_dict(),
         "rng_torch": torch.get_rng_state(),
         "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
     }
+
     p = checkpoint_path(run_dir)
     torch.save(ckpt, p)
-    print(f"[ckpt] saved -> {p}")
+    print(f"[ckpt] saved -> {p} (epoch_next={epoch_next}, step={step})")
+
+
 
 
 def load_checkpoint(run_dir: Path, model: nn.Module, optimizer: optim.Optimizer) -> tuple[int, int]:
@@ -111,7 +115,12 @@ def load_checkpoint(run_dir: Path, model: nn.Module, optimizer: optim.Optimizer)
     if not p.exists():
         raise FileNotFoundError(f"checkpoint not found: {p}")
 
-    ckpt = torch.load(p, map_location="cpu")
+    # torch 버전에 따라 weights_only 인자가 없을 수 있으므로 안전하게 처리
+    try:
+        ckpt = torch.load(p, map_location="cpu", weights_only=False)
+    except TypeError:
+        ckpt = torch.load(p, map_location="cpu")
+
     model.load_state_dict(ckpt["model"])
     optimizer.load_state_dict(ckpt["optimizer"])
 
@@ -121,10 +130,15 @@ def load_checkpoint(run_dir: Path, model: nn.Module, optimizer: optim.Optimizer)
     if torch.cuda.is_available() and "rng_cuda" in ckpt and ckpt["rng_cuda"] is not None:
         torch.cuda.set_rng_state_all(ckpt["rng_cuda"])
 
-    epoch = int(ckpt.get("epoch", 0))
+    # epoch_next 우선, 없으면(구버전 ckpt) epoch+1로 해석
+    if "epoch_next" in ckpt and ckpt["epoch_next"] is not None:
+        epoch_next = int(ckpt["epoch_next"])
+    else:
+        epoch_next = int(ckpt.get("epoch", 0)) + 1
+
     step = int(ckpt.get("step", 0))
-    print(f"[ckpt] loaded <- {p} (epoch={epoch}, step={step})")
-    return epoch, step
+    print(f"[ckpt] loaded <- {p} (epoch_next={epoch_next}, step={step})")
+    return epoch_next, step
 
 
 def build_dummy_model(input_dim=1024, hidden=2048, out_dim=10) -> nn.Module:
@@ -149,14 +163,22 @@ def main() -> None:
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--exp", default=None, help="experiment config json (overrides defaults)")
     ap.add_argument("--dataset", default=None, help="dataset name under data_dir (expects processed/train.npz)")
-    args = ap.parse_args()
-    # experiment config (json) 적용: exp 파일 값으로 args를 덮어씀
-    if args.exp:
-        exp_path = Path(args.exp)
+              
+    # exp를 "기본값(defaults)"으로만 적용해서, CLI가 exp를 덮어쓰게 만들기
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--exp", default=None)
+    pre_args, _ = pre.parse_known_args()
+
+    if pre_args.exp:
+        exp_path = Path(pre_args.exp)
         exp_cfg = json.loads(exp_path.read_text(encoding="utf-8"))
-        for k, v in exp_cfg.items():
-            if hasattr(args, k):
-                setattr(args, k, v)
+
+        allowed = {a.dest for a in ap._actions}  # argparse에 등록된 인자만 허용
+        exp_cfg = {k: v for k, v in exp_cfg.items() if k in allowed}
+
+        ap.set_defaults(**exp_cfg)
+
+    args = ap.parse_args()
 
 
     # paths.json 로드 (data_dir / outputs_dir)
@@ -272,6 +294,8 @@ def main() -> None:
 
 
     epoch = start_epoch
+    start_epoch = 0
+    global_step = 0    
     try:
         for epoch in range(start_epoch, args.epochs):
             model.train()
@@ -334,7 +358,12 @@ def main() -> None:
 
 
             # 매 epoch마다 항상 최신 체크포인트 저장
-            save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
+            save_checkpoint(run_dir, epoch_next=epoch + 1, step=global_step, model=model, optimizer=optimizer)
+
+        # 루프가 0번 돌았으면(avg가 None) 요약 저장 없이 종료
+        if avg is None:
+            print("[done] nothing to do (already at or beyond target epochs).")
+            return
 
         save_summary(
             run_dir,
@@ -352,7 +381,7 @@ def main() -> None:
 
     except KeyboardInterrupt:
         print("[interrupt] caught Ctrl+C. Saving checkpoint then exiting...")
-        save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
+        save_checkpoint(run_dir, epoch_next=epoch, step=global_step, model=model, optimizer=optimizer)
         print("[interrupt] checkpoint saved. safe exit.")
 
 
