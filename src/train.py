@@ -142,6 +142,12 @@ def load_checkpoint(run_dir: Path, model: nn.Module, optimizer: optim.Optimizer)
 
 
 def build_dummy_model(input_dim=1024, hidden=2048, out_dim=10) -> nn.Module:
+    if hidden_dim is None or hidden_dim <= 0:
+        return nn.Linear(input_dim, num_classes)
+    
+    
+    
+    
     return nn.Sequential(
         nn.Linear(input_dim, hidden),
         nn.ReLU(),
@@ -160,6 +166,9 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--steps_per_epoch", type=int, default=50)
     ap.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--hidden_dim", type=int, default=0,
+                    help="MLP hidden dim. 0 means linear model.")
+
     ap.add_argument("--lr", type=float, default=1e-3)
     ap.add_argument("--exp", default=None, help="experiment config json (overrides defaults)")
     ap.add_argument("--dataset", default=None, help="dataset name under data_dir (expects processed/train.npz)")
