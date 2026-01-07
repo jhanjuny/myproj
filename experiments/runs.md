@@ -27,3 +27,16 @@
 |---|---|---|---:|---:|
 | lr=1e-3 | configs/exp/lr_1e3.json | outputs/run_20260107_153055 | 0.124 | 1.0072131407260896 |
 | lr=1e-4 | configs/exp/lr_1e4.json | outputs/run_20260107_153058 | 0.119 | 2.023144795894623 |
+
+## 2026-01-07 sweep (demo) @ 15:37:41
+
+| tag | exp | run_dir | last_val_acc | last_train_loss |
+|---|---|---|---:|---:|
+| lr=1e-3 | configs\exp\dummy.json | outputs/run_20260107_153743 | 0.1240 | 1.0072 |
+| lr=1e-3 | configs\exp\lr_1e3.json | outputs/run_20260107_153746 | 0.1240 | 1.0072 |
+| lr=1e-4 | configs\exp\lr_1e4.json | outputs/run_20260107_153748 | 0.1190 | 2.0231 |
+
+## 2026-01-07 sweep (demo) @ 15:44:41
+
+| tag | exp | run_dir | last_val_acc | last_train_loss |
+|---|---|---|---:|---:|
