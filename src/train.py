@@ -259,6 +259,9 @@ def main() -> None:
     input_dim = 1024
     num_classes = 10
 
+    
+
+
     if args.dataset:
         train_npz = data_dir / args.dataset / "processed" / "train.npz"
         if train_npz.exists():
@@ -279,11 +282,24 @@ def main() -> None:
 
         else:
             print(f"[data] not found: {train_npz}. fallback to random data.")
+            # fallback: define input_dim/num_classes and make a random dataset/loader
+            input_dim = 1024
+            num_classes = 10
+
+            x = torch.randn(5000, input_dim)
+            y = torch.randint(0, num_classes, (5000,), dtype=torch.long)
+
+            ds = torch.utils.data.TensorDataset(x, y)
+            train_loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
+            val_loader = None
+
+            print(f"[data] fallback random: (N={len(ds)}, D={input_dim}, C={num_classes})")
 
 
-
+  
     # 더미 학습 루프 (체크포인트/재시작 동작 검증용)
-    model = build_model(input_dim=D, num_classes=C, hidden_dim=args.hidden_dim).to(device)
+    model = build_model(input_dim=input_dim, num_classes=num_classes, hidden_dim=args.hidden_dim).to(device)
+
 
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
