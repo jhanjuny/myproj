@@ -1,11 +1,21 @@
 ﻿param(
   [string]$Dataset = "demo",
   [int]$Epochs = 3,
-  [string[]]$Exps = @("configs/exp/lr_1e3.json", "configs/exp/lr_1e4.json"),
+  [string[]]$Exps = @(),
   [string]$Python = "D:\conda_envs\torch\python.exe",
   [string]$TrainScript = "src/train.py",
   [string]$RunsMd = "experiments/runs.md"
 )
+
+
+if ($Exps.Count -eq 0) {
+  $Exps = Get-ChildItem -Path "configs/exp" -Filter "*.json" |
+    Sort-Object Name |
+    ForEach-Object { Join-Path "configs/exp" $_.Name }
+}
+
+
+
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
@@ -13,8 +23,16 @@ $ErrorActionPreference = "Stop"
 function Read-Json([string]$Path) {
   if (!(Test-Path $Path)) { return $null }
   # BOM 대응
+  
   $txt = Get-Content -Raw -Encoding UTF8 $Path
-  try { return ($txt | ConvertFrom-Json) } catch { return ($txt | ConvertFrom-Json) }
+
+  # UTF-8 BOM 제거 (JSONDecodeError 예방)
+  if ($txt.Length -gt 0 -and [int]$txt[0] -eq 0xFEFF) {
+    $txt = $txt.Substring(1)
+  }
+
+  return ($txt | ConvertFrom-Json)
+
 }
 
 function Get-TagFromExp([string]$ExpPath) {
@@ -102,8 +120,12 @@ foreach ($exp in $Exps) {
   $accStr  = if ($null -ne $acc)  { "{0:F4}" -f [double]$acc } else { "" }
   $lossStr = if ($null -ne $loss) { "{0:F4}" -f [double]$loss } else { "" }
 
+
   
-  Add-Content -Encoding UTF8 $RunsMd ("| {0} | {1} | {2} | {3} | {4} |" -f $tag, $exp, $relRun, $acc, $loss)
+
+  Add-Content -Encoding UTF8 $RunsMd ("| {0} | {1} | {2} | {3} | {4} |" -f $tag, $exp, $relRun, $accStr, $lossStr)
+
+
 }
 
 Write-Host "Updated: $RunsMd"

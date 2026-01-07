@@ -171,7 +171,8 @@ def main() -> None:
 
     if pre_args.exp:
         exp_path = Path(pre_args.exp)
-        exp_cfg = json.loads(exp_path.read_text(encoding="utf-8"))
+        exp_cfg = json.loads(exp_path.read_text(encoding="utf-8-sig"))
+
 
         allowed = {a.dest for a in ap._actions}  # argparse에 등록된 인자만 허용
         exp_cfg = {k: v for k, v in exp_cfg.items() if k in allowed}
@@ -183,7 +184,8 @@ def main() -> None:
 
     # paths.json 로드 (data_dir / outputs_dir)
     paths_path = Path(args.paths)
-    paths = json.loads(paths_path.read_text(encoding="utf-8"))
+    paths = json.loads(paths_path.read_text(encoding="utf-8-sig"))
+
     data_dir = Path(paths["data_dir"])
     outputs_dir = Path(paths["outputs_dir"])
     outputs_dir.mkdir(parents=True, exist_ok=True)
