@@ -141,18 +141,16 @@ def load_checkpoint(run_dir: Path, model: nn.Module, optimizer: optim.Optimizer)
     return epoch_next, step
 
 
-def build_dummy_model(input_dim=1024, hidden=2048, out_dim=10) -> nn.Module:
+
+def build_model(input_dim: int, num_classes: int, hidden_dim: int) -> nn.Module:
     if hidden_dim is None or hidden_dim <= 0:
         return nn.Linear(input_dim, num_classes)
-    
-    
-    
-    
     return nn.Sequential(
-        nn.Linear(input_dim, hidden),
+        nn.Linear(input_dim, hidden_dim),
         nn.ReLU(),
-        nn.Linear(hidden, out_dim),
+        nn.Linear(hidden_dim, num_classes),
     )
+
 
 
 def main() -> None:
@@ -166,7 +164,7 @@ def main() -> None:
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--steps_per_epoch", type=int, default=50)
     ap.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--hidden_dim", type=int, default=0,
+    ap.add_argument("--hidden_dim", type=int, default=0,
                     help="MLP hidden dim. 0 means linear model.")
 
     ap.add_argument("--lr", type=float, default=1e-3)
@@ -285,7 +283,8 @@ def main() -> None:
 
 
     # 더미 학습 루프 (체크포인트/재시작 동작 검증용)
-    model = build_dummy_model(input_dim=input_dim, out_dim=num_classes).to(device)
+    model = build_model(input_dim=D, num_classes=C, hidden_dim=args.hidden_dim).to(device)
+
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
