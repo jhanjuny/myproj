@@ -73,6 +73,16 @@ def setup_logger(run_dir: Path) -> None:
 def save_json(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
 
+def append_jsonl(path: Path, obj: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+def save_summary(run_dir: Path, obj: dict) -> None:
+    save_json(run_dir / "summary.json", obj)
+
+
 
 def checkpoint_path(run_dir: Path) -> Path:
     return run_dir / "checkpoint_last.pt"
@@ -159,6 +169,9 @@ def main() -> None:
 
     setup_logger(run_dir)
 
+    metrics_path = run_dir / "metrics.jsonl"
+    t0 = time.time()
+
     # 환경 정보 출력/저장
     cuda_available = torch.cuda.is_available()
     device_name = torch.cuda.get_device_name(0) if cuda_available else None
@@ -232,6 +245,7 @@ def main() -> None:
         for epoch in range(start_epoch, args.epochs):
             model.train()
             running_loss = 0.0
+            val_acc = None
             it = iter(train_loader) if train_loader is not None else None
 
             for _ in range(args.steps_per_epoch):
@@ -271,12 +285,37 @@ def main() -> None:
                         pred = logits.argmax(dim=1)
                         correct += (pred == vy).sum().item()
                         total += vy.numel()
-                acc = correct / max(1, total)
-                print(f"[eval] epoch={epoch} val_acc={acc:.4f}")
+                
+                val_acc = correct / max(1, total)
+                print(f"[eval] epoch={epoch} val_acc={val_acc:.4f}")
                 model.train()
+
+            append_jsonl(
+                metrics_path,
+                {
+                    "epoch": epoch,
+                    "step": global_step,
+                    "train_loss": avg,
+                    "val_acc": val_acc,
+                    "elapsed_sec": round(time.time() - t0, 3),
+                },
+            )
+
 
             # 매 epoch마다 항상 최신 체크포인트 저장
             save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
+
+        save_summary(
+            run_dir,
+            {
+                "epochs": args.epochs,
+                "last_epoch": epoch,
+                "last_step": global_step,
+                "last_train_loss": avg,
+                "last_val_acc": val_acc,
+            },
+        )
+
 
         print("[done] training finished.")
 
