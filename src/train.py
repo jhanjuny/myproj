@@ -159,6 +159,12 @@ def main() -> None:
                 setattr(args, k, v)
 
 
+    # paths.json 로드 (data_dir / outputs_dir)
+    paths_path = Path(args.paths)
+    paths = json.loads(paths_path.read_text(encoding="utf-8"))
+    data_dir = Path(paths["data_dir"])
+    outputs_dir = Path(paths["outputs_dir"])
+    outputs_dir.mkdir(parents=True, exist_ok=True)
 
    
     # run_dir 결정 우선순위:
