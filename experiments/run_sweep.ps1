@@ -90,15 +90,14 @@ Add-Content -Encoding UTF8 $RunsMd "|---|---|---|---:|---:|"
 foreach ($exp in $Exps) {
   if (!(Test-Path $exp)) { throw "exp 파일이 없습니다: $exp" }
 
+  $baseTag = Get-TagFromExp $exp
+
   foreach ($seed in $Seeds) {
     foreach ($bs in $BatchSizes) {
       foreach ($hd in $HiddenDims) {
         foreach ($spe in $StepsPerEpochs) {
 
-          Write-Host "=== RUN exp=$exp seed=$seed bs=$bs hd=$hd spe=$spe ==="
-
-          $tag = Get-TagFromExp $exp
-          $tagFull = $tag
+          $tagFull = $baseTag
           if ($seed -ne $null) { $tagFull += " seed=$seed" }
           if ($bs -ne $null)   { $tagFull += " bs=$bs" }
           if ($hd -ne $null)   { $tagFull += " hd=$hd" }
@@ -109,6 +108,8 @@ foreach ($exp in $Exps) {
           if ($bs -ne $null)   { $extra += @("--batch_size", "$bs") }
           if ($hd -ne $null)   { $extra += @("--hidden_dim", "$hd") }
           if ($spe -ne $null)  { $extra += @("--steps_per_epoch", "$spe") }
+
+          Write-Host "=== RUN $tagFull exp=$exp ==="
 
           # 실행 (출력 캡쳐)
           $out = & $Python $TrainScript --dataset $Dataset --exp $exp --epochs $Epochs @extra 2>&1
@@ -154,5 +155,6 @@ foreach ($exp in $Exps) {
     }
   }
 }
+
 
 Write-Host "Updated: $RunsMd"
