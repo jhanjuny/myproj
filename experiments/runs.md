@@ -12,3 +12,13 @@
   - `D:\conda_envs\torch\python.exe src\train.py --dataset demo --exp configs\exp\lr_1e3.json --epochs 3`
 - lr=1e-4:
   - `D:\conda_envs\torch\python.exe src\train.py --dataset demo --exp configs\exp\lr_1e4.json --epochs 3`
+
+## 2026-01-07 sweep (demo) - lr comparison
+
+- run_20260107_151542
+  - exp: configs/exp/lr_1e3.json (lr=1e-3)
+  - last_val_acc: 0.1240
+
+- run_20260107_151545
+  - exp: configs/exp/lr_1e4.json (lr=1e-4)
+  - last_val_acc: 0.1190
