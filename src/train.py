@@ -188,6 +188,7 @@ def main() -> None:
 
     # dataset 로드 (있으면 사용, 없으면 랜덤 데이터 fallback)
     train_loader = None
+    val_loader = None
     input_dim = 1024
     num_classes = 10
 
@@ -199,10 +200,18 @@ def main() -> None:
             num_classes = ds.num_classes
             train_loader = DataLoader(ds, batch_size=args.batch_size, shuffle=True, num_workers=0)
             print(f"[data] loaded: {train_npz} (N={len(ds)}, D={input_dim}, C={num_classes})")
+            # ===== 6-2B: val 로드 추가 (여기에 넣는 게 정답) =====
+            val_npz = data_dir / args.dataset / "processed" / "val.npz"
+            if val_npz.exists():
+                val_ds = NpzClassificationDataset(val_npz)
+                val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
+                print(f"[data] loaded: {val_npz} (N={len(val_ds)}, D={val_ds.input_dim}, C={val_ds.num_classes})")
+            else:
+                print(f"[data] val not found: {val_npz}. skip evaluation.")
+             # ===================================================
+
         else:
             print(f"[data] not found: {train_npz}. fallback to random data.")
-
-
 
 
 
@@ -249,6 +258,22 @@ def main() -> None:
 
             avg = running_loss / max(1, args.steps_per_epoch)
             print(f"[train] epoch={epoch} step={global_step} loss={avg:.6f}")
+            
+            if val_loader is not None:
+                model.eval()
+                correct = 0
+                total = 0
+                with torch.no_grad():
+                    for vx_cpu, vy_cpu in val_loader:
+                        vx = vx_cpu.to(device, non_blocking=True)
+                        vy = vy_cpu.to(device, non_blocking=True)
+                        logits = model(vx)
+                        pred = logits.argmax(dim=1)
+                        correct += (pred == vy).sum().item()
+                        total += vy.numel()
+                acc = correct / max(1, total)
+                print(f"[eval] epoch={epoch} val_acc={acc:.4f}")
+                model.train()
 
             # 매 epoch마다 항상 최신 체크포인트 저장
             save_checkpoint(run_dir, epoch=epoch, step=global_step, model=model, optimizer=optimizer)
