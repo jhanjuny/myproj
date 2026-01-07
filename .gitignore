@@ -25,6 +25,9 @@ data/**/processed/
 h
 *.log
 
+experiments/runs_local.md
+
+
 # OS
 .DS_Store
 Thumbs.db

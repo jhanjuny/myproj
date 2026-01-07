@@ -4,7 +4,7 @@
   [string[]]$Exps = @(),
   [string]$Python = "D:\conda_envs\torch\python.exe",
   [string]$TrainScript = "src/train.py",
-  [string]$RunsMd = "experiments/runs.md"
+  [string]$RunsMd = "experiments/runs_local.md"
 )
 
 
