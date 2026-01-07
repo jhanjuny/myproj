@@ -99,6 +99,10 @@ foreach ($exp in $Exps) {
   $leaf = Split-Path $runDir -Leaf
   $relRun = "outputs/$leaf"
 
+  $accStr  = if ($null -ne $acc)  { "{0:F4}" -f [double]$acc } else { "" }
+  $lossStr = if ($null -ne $loss) { "{0:F4}" -f [double]$loss } else { "" }
+
+  
   Add-Content -Encoding UTF8 $RunsMd ("| {0} | {1} | {2} | {3} | {4} |" -f $tag, $exp, $relRun, $acc, $loss)
 }
 

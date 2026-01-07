@@ -20,3 +20,10 @@
 |---|---|---|---:|---:|
 | lr=1e-3 | configs/exp/lr_1e3.json | outputs/run_20260107_152633 | 0.124 | 1.0072131407260896 |
 | lr=1e-4 | configs/exp/lr_1e4.json | outputs/run_20260107_152636 | 0.119 | 2.023144795894623 |
+
+## 2026-01-07 sweep (demo) @ 15:30:54
+
+| tag | exp | run_dir | last_val_acc | last_train_loss |
+|---|---|---|---:|---:|
+| lr=1e-3 | configs/exp/lr_1e3.json | outputs/run_20260107_153055 | 0.124 | 1.0072131407260896 |
+| lr=1e-4 | configs/exp/lr_1e4.json | outputs/run_20260107_153058 | 0.119 | 2.023144795894623 |
