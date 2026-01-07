@@ -87,6 +87,10 @@ def save_summary(run_dir: Path, obj: dict) -> None:
 def checkpoint_path(run_dir: Path) -> Path:
     return run_dir / "checkpoint_last.pt"
 
+def find_latest_run_dir(outputs_dir: Path) -> Path | None:
+    runs = sorted(outputs_dir.glob("run_*"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return runs[0] if runs else None
+
 
 def save_checkpoint(run_dir: Path, epoch: int, step: int, model: nn.Module, optimizer: optim.Optimizer) -> None:
     ckpt = {
@@ -136,6 +140,8 @@ def main() -> None:
     ap.add_argument("--paths", default="configs/paths.json", help="path json file containing data_dir/outputs_dir")
     ap.add_argument("--run_dir", default=None, help="existing run dir to resume or custom output dir")
     ap.add_argument("--resume", action="store_true", help="resume from checkpoint_last.pt in run_dir")
+    ap.add_argument("--resume_from", default=None, help="resume from a specific run_dir containing checkpoint_last.pt")
+    ap.add_argument("--resume_latest", action="store_true", help="resume from latest run_* under outputs_dir")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--epochs", type=int, default=3)
     ap.add_argument("--steps_per_epoch", type=int, default=50)
@@ -154,18 +160,29 @@ def main() -> None:
 
 
 
-    # paths.json 로드
-    paths_path = Path(args.paths)
-    paths = json.loads(paths_path.read_text(encoding="utf-8"))
-    data_dir = Path(paths["data_dir"])
-    outputs_dir = Path(paths["outputs_dir"])
-
-    # run_dir 결정
-    if args.run_dir:
+   
+    # run_dir 결정 우선순위:
+    # 1) --resume_from
+    # 2) --resume_latest
+    # 3) --run_dir (사용자 지정 출력 디렉터리)
+    # 4) 새 run_YYYYMMDD_HHMMSS 생성
+    if args.resume_from:
+        run_dir = Path(args.resume_from)
+        args.resume = True
+    elif args.resume_latest:
+        latest = find_latest_run_dir(outputs_dir)
+        if latest is None:
+            raise FileNotFoundError(f"no run_* found under outputs_dir: {outputs_dir}")
+        run_dir = latest
+        args.resume = True
+    elif args.run_dir:
         run_dir = Path(args.run_dir)
     else:
         run_dir = outputs_dir / f"run_{now_tag()}"
+
     run_dir.mkdir(parents=True, exist_ok=True)
+
+
 
     setup_logger(run_dir)
 
@@ -234,11 +251,19 @@ def main() -> None:
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     loss_fn = nn.CrossEntropyLoss()
 
+
+
     start_epoch = 0
     global_step = 0
 
     if args.resume:
+        ckpt_p = checkpoint_path(run_dir)
+        if not ckpt_p.exists():
+            print(f"[resume] checkpoint not found: {ckpt_p}")
+            print("[resume] tip: run once without --resume, or use --resume_from to point to a run_dir that has checkpoint_last.pt")
+            return
         start_epoch, global_step = load_checkpoint(run_dir, model, optimizer)
+
 
     epoch = start_epoch
     try:
