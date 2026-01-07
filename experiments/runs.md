@@ -13,3 +13,10 @@
 
 ### Per-run outputs (run_dir)
 - stdout.log / metrics.jsonl / summary.json / checkpoint_last.pt / args_effective.json / run_info.json
+
+## 2026-01-07 sweep (demo) @ 15:26:32
+
+| tag | exp | run_dir | last_val_acc | last_train_loss |
+|---|---|---|---:|---:|
+| lr=1e-3 | configs/exp/lr_1e3.json | outputs/run_20260107_152633 | 0.124 | 1.0072131407260896 |
+| lr=1e-4 | configs/exp/lr_1e4.json | outputs/run_20260107_152636 | 0.119 | 2.023144795894623 |
