@@ -188,6 +188,23 @@ def main() -> None:
 
     args = ap.parse_args()
 
+    # ---- basic argument validation ----
+    if args.epochs <= 0:
+        ap.error("--epochs must be > 0")
+    if args.steps_per_epoch <= 0:
+        ap.error("--steps_per_epoch must be > 0")
+    if args.batch_size <= 0:
+        ap.error("--batch_size must be > 0")
+    if args.lr <= 0:
+        ap.error("--lr must be > 0")
+    if args.hidden_dim < 0:
+        ap.error("--hidden_dim must be >= 0")
+
+    if args.seed < 0:
+        ap.error("--seed must be >= 0")
+
+
+
 
     # paths.json 로드 (data_dir / outputs_dir)
     paths_path = Path(args.paths)
@@ -274,6 +291,11 @@ def main() -> None:
             val_npz = data_dir / args.dataset / "processed" / "val.npz"
             if val_npz.exists():
                 val_ds = NpzClassificationDataset(val_npz)
+                if val_ds.input_dim != input_dim or val_ds.num_classes != num_classes:
+                    raise ValueError(
+                        f"val.npz mismatch: val(D={val_ds.input_dim}, C={val_ds.num_classes}) "
+                        f"!= train(D={input_dim}, C={num_classes})"
+                    )
                 val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=0)
                 print(f"[data] loaded: {val_npz} (N={len(val_ds)}, D={val_ds.input_dim}, C={val_ds.num_classes})")
             else:
@@ -401,7 +423,9 @@ def main() -> None:
             {
                 "epochs": args.epochs,
                 "last_epoch": epoch,
+                "epoch_next": epoch + 1,          # 추가
                 "last_step": global_step,
+                "global_step": global_step,       # 추가
                 "last_train_loss": avg,
                 "last_val_acc": val_acc,
             },
