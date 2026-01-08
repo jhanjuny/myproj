@@ -78,6 +78,24 @@ if ($BatchSizes.Count -eq 0) { $BatchSizes = @($null) }
 if ($HiddenDims.Count -eq 0) { $HiddenDims = @($null) }
 if ($StepsPerEpochs.Count -eq 0) { $StepsPerEpochs = @($null) }
 
+function Normalize-List($vals) {
+  $out = @()
+  foreach ($v in $vals) {
+    if ($null -eq $v) { $out += @($null); continue }
+    if ($v -is [string] -and $v -match ",") {
+      $out += ($v -split "," | ForEach-Object { $_.Trim() })
+    } else {
+      $out += $v
+    }
+  }
+  return ,$out
+}
+
+$Seeds = Normalize-List $Seeds
+$BatchSizes = Normalize-List $BatchSizes
+$HiddenDims = Normalize-List $HiddenDims
+$StepsPerEpochs = Normalize-List $StepsPerEpochs
+
 
 $stampDate = (Get-Date -Format "yyyy-MM-dd")
 $stampTime = (Get-Date -Format "HH:mm:ss")
