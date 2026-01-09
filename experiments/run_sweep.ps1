@@ -18,7 +18,18 @@ if ($Exps.Count -eq 0) {
     ForEach-Object { Join-Path "configs/exp" $_.Name }
 }
 
+# ---- normalize Exps list (supports comma-separated strings) ----
+$Exps = @(
+  $Exps |
+    ForEach-Object { $_.ToString().Split(",") } |
+    ForEach-Object { $_.Trim() } |
+    Where-Object { $_ -ne "" } |
+    ForEach-Object { $_ -replace "/", "\" }
+)
 
+if (!(Test-Path $Python)) {
+  throw "Python not found: $Python. Pass -Python <path-to-python.exe> (e.g., remote: D:\conda_envs\torch\python.exe)"
+}
 
 
 Set-StrictMode -Version Latest
