@@ -24,7 +24,7 @@ $Exps = @(
     ForEach-Object { $_.ToString().Split(",") } |
     ForEach-Object { $_.Trim() } |
     Where-Object { $_ -ne "" } |
-    ForEach-Object { $_ -replace "/", "\" }
+    ForEach-Object { $_.ToString().Replace("/", "\") }
 )
 
 if (!(Test-Path $Python)) {
