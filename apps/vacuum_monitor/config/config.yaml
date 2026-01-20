@@ -1,0 +1,44 @@
+sampling:
+  interval_sec: 1
+  excel_export_sec: 600
+
+cameras:
+  - id: top
+    input: file
+    source: apps/vacuum_monitor/data/top_sample.mp4
+    aruco:
+      dict: DICT_4X4_50
+      ids: [0,1,2,3]
+      output_size: [1200, 400]
+
+  - id: bottom
+    input: file
+    source: apps/vacuum_monitor/data/bottom_sample.mp4
+    aruco:
+      dict: DICT_4X4_50
+      ids: [4,5,6,7]
+      output_size: [1200, 800]
+
+rois:
+  top:
+    # 상단 MG13 (3개 × 2줄 = 6개)
+    - name: MG13_1_CH1
+      rect: [100, 60, 450, 55]
+    - name: MG13_1_CH2
+      rect: [100, 125, 450, 55]
+    - name: MG13_2_CH1
+      rect: [500, 60, 450, 55]
+    - name: MG13_2_CH2
+      rect: [500, 125, 450, 55]
+    - name: MG13_3_CH1
+      rect: [900, 60, 450, 55]
+    - name: MG13_3_CH2
+      rect: [900, 125, 450, 55]
+
+  bottom:
+    # PCU16 (6개 × 2값 = 12개)
+    - name: AN_HG
+      rect: [700, 120, 300, 60]
+    - name: AN_FG
+      rect: [700, 200, 300, 60]
+    # 나머지 10개는 이후 동일 패턴으로 추가
