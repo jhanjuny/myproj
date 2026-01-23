@@ -1,44 +1,196 @@
+# tesseract:
+#   cmd: "C:/Users/hanjunpy/AppData/Local/Programs/Tesseract-OCR/tesseract.exe"
+
+
+
+
+# sampling:
+#   interval_sec: 1
+#   excel_export_sec: 600
+
+# # main.py는 cfg["cameras"]를 읽습니다. (camera/views 아님)
+# cameras:
+#   - id: top
+#     input: file
+#     source: data/pi_sample.mp4
+#     crop: [87, 431, 724, 172]          # 방금 ROI 선택으로 얻은 crop 값(상단 영역이면 top에)
+#     # aruco는 일단 끄고 시작 권장(없으면 생략 가능)
+#     # aruco:
+#     #   dict: DICT_4X4_50
+#     #   ids: [0,1,2,3]
+#     #   output_size: [1200, 400]
+
+#   - id: bottom
+#     input: file
+#     source: data/pi_sample.mp4
+#     crop: [73, 641, 889, 730]               # 여기엔 bottom crop 값 넣기(당신이 이미 뽑은 값)
+#     # aruco:
+#     #   dict: DICT_4X4_50
+#     #   ids: [4,5,6,7]
+#     #   output_size: [1200, 800]
+
+
+
+# rois:
+#   top:
+#     - name: MG13_1_CH1
+#       rect: [283, 15, 171, 28]
+#     - name: MG13_1_CH2
+#       rect: [284, 35, 174, 32]
+#     - name: MG13_2_CH1
+#       rect: [39, 113, 168, 29]
+#     - name: MG13_2_CH2
+#       rect: [41, 138, 169, 29]
+#     - name: MG13_3_CH1
+#       rect: [553, 115, 167, 28]
+#     - name: MG13_3_CH2
+#       rect: [553, 142, 166, 26]
+
+#   bottom:
+#     - name: AN_HG
+#       rect: [242, 85, 124, 20]
+#     - name: AN_FG
+#       rect: [242, 128, 128, 23]
+#     - name: PP_HG
+#       rect: [683, 85, 123, 21]
+#     - name: PP_FG
+#       rect: [686, 124, 120, 26]
+#     - name: VV_FG1
+#       rect: [246, 359, 120, 25]
+#     - name: VV_FG2
+#       rect: [250, 401, 117, 24]
+#     - name: MN_HG
+#       rect: [685, 356, 119, 21]
+#     - name: MN_FG
+#       rect: [684, 395, 117, 23]
+#     - name: LL_HG
+#       rect: [250, 627, 122, 20]
+#     - name: LL_FG
+#       rect: [253, 668, 118, 23]
+#     - name: IS_HG
+#       rect: [669, 619, 109, 27]
+#     - name: IS_FG
+#       rect: [663, 656, 111, 26]
+
+
+
+# readout:
+#   engine: tesseract
+#   tesseract_cmd: "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+#   psm: 7
+#   whitelist: "0123456789eE+-. "
+
+
+
 sampling:
   interval_sec: 1
-  excel_export_sec: 600
+  excel_export_sec: 600 
 
 cameras:
   - id: top
     input: file
-    source: apps/vacuum_monitor/data/top_sample.mp4
-    aruco:
-      dict: DICT_4X4_50
-      ids: [0,1,2,3]
-      output_size: [1200, 400]
+    source: data/pi_sample.mp4
+    crop: [87, 431, 724, 172]
+    # aruco:  # 필요 시 나중에 켜기
+    #   dict: DICT_4X4_50
+    #   ids: [0,1,2,3]
+    #   output_size: [1200, 400]
 
   - id: bottom
     input: file
-    source: apps/vacuum_monitor/data/bottom_sample.mp4
-    aruco:
-      dict: DICT_4X4_50
-      ids: [4,5,6,7]
-      output_size: [1200, 800]
+    source: data/pi_sample.mp4
+    crop: [73, 641, 889, 730]
+    # aruco:
+    #   dict: DICT_4X4_50
+    #   ids: [4,5,6,7]
+    #   output_size: [1200, 800]
 
 rois:
   top:
-    # 상단 MG13 (3개 × 2줄 = 6개)
     - name: MG13_1_CH1
-      rect: [100, 60, 450, 55]
+      rect: [283, 15, 171, 28]
     - name: MG13_1_CH2
-      rect: [100, 125, 450, 55]
+      rect: [284, 35, 174, 32]
     - name: MG13_2_CH1
-      rect: [500, 60, 450, 55]
+      rect: [39, 113, 168, 29]
     - name: MG13_2_CH2
-      rect: [500, 125, 450, 55]
+      rect: [41, 138, 169, 29]
     - name: MG13_3_CH1
-      rect: [900, 60, 450, 55]
+      rect: [553, 115, 167, 28]
     - name: MG13_3_CH2
-      rect: [900, 125, 450, 55]
+      rect: [553, 142, 166, 26]
 
   bottom:
-    # PCU16 (6개 × 2값 = 12개)
     - name: AN_HG
-      rect: [700, 120, 300, 60]
+      rect: [242, 85, 124, 20]
     - name: AN_FG
-      rect: [700, 200, 300, 60]
-    # 나머지 10개는 이후 동일 패턴으로 추가
+      rect: [242, 128, 128, 23]
+    - name: PP_HG
+      rect: [683, 85, 123, 21]
+    - name: PP_FG
+      rect: [686, 124, 120, 26]
+    - name: VV_FG1
+      rect: [246, 359, 120, 25]
+    - name: VV_FG2
+      rect: [250, 401, 117, 24]
+    - name: MN_HG
+      rect: [685, 356, 119, 21]
+    - name: MN_FG
+      rect: [684, 395, 117, 23]
+    - name: LL_HG
+      rect: [250, 627, 122, 20]
+    - name: LL_FG
+      rect: [253, 668, 118, 23]
+    - name: IS_HG
+      rect: [669, 619, 109, 27]
+    - name: IS_FG
+      rect: [663, 656, 111, 26]
+
+readout:
+  engine: tesseract
+  tesseract_cmd: "C:/Users/hanjunpy/AppData/Local/Programs/Tesseract-OCR/tesseract.exe"
+  psm: 7
+  whitelist: "0123456789eE+-."
+
+
+
+#test code
+# alerts:
+#   cooldown_sec: 10
+#   missing_k: 2
+#   warmup_n: 3
+#   baseline_window_n: 60
+#   threshold_log10: 1.0
+#   skip_outliers: true
+#   value_min: 1.0e-20
+#   value_max: 1.0e+3
+#   email:
+#     enabled: false
+
+
+#real code
+
+alerts:
+  threshold_log10: 1.0        # 1.0이면 10배
+  baseline_window_n: 60       # 최근 60개(샘플 1초면 60초)로 baseline 평균
+  warmup_n: 20                # 최소 20개 쌓이기 전엔 anomaly/missing 판단 안 함
+  missing_k: 3                # 정상 운용하던 ROI가 연속 3번 invalid면 MISSING
+  skip_outliers: true         # anomaly 값은 baseline에 넣지 않음
+  cooldown_sec: 3600          # 1시간마다 반복 발송
+  value_min: 1.0e-20
+  value_max: 1.0e+3
+
+
+
+    # 나머지 SMTP 설정은 네 send_email_smtp 구현에 맞춰 유지
+  email:
+    enabled: true
+    to: ["hanjun2217@skku.edu"]
+    from: "hanjun2217@g.skku.edu"
+    subject_prefix: "[VACUUM ALERT]"
+    smtp_host: "smtp.yourdomain.ac.kr"
+    smtp_port: 587
+    starttls: true
+    username_env: "VACUUM_SMTP_USER"
+    password_env: "VACUUM_SMTP_PASS"
+
