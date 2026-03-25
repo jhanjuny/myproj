@@ -1,0 +1,33 @@
+실행 코드
+4) 지금(집)에서 테스트하는 명령어 (PC2 없이 가능)
+4-1. Wizard만 먼저 실행 (mp4 파일 기반)
+python -m apps.vacuum_monitor.wizard --template apps/vacuum_monitor/config/config.yaml --out vacuum_monitor_config.yaml
+
+
+Wizard에서 crop/roi 잡고, 이메일 설정 입력하고, S 누르면 저장됩니다.
+
+4-2. 모니터링 실행 (runtime_config 사용)
+python -m apps.vacuum_monitor.main --config apps/vacuum_monitor/config/config.yaml --runtime_config vacuum_monitor_config.yaml --no_display --duration_sec 10 --max_samples 10 --save_roi_images
+
+=> roi 확인하는 코드
+python scripts\select_roi.py $topImg
+python scripts\select_roi.py $botImg
+python apps\vacuum_monitor\main.py
+
+
+
+$run = Get-ChildItem -Directory outputs\vacuum_monitor -Filter "run_*" |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+Get-Content (Join-Path $run.FullName "alerts.log")
+
+
+=> main.py 실행 코드
+python -m apps.vacuum_monitor.main --no_display --duration_sec 130 --max_samples 130 --save_roi_images
+
+unkown20000123@gmail.com
+
+
+=> monitor.exe 만드는 코드
+ pyinstaller --noconfirm --onefile --console --name "VacuumMonitor" --paths . --hidden-import "apps.vacuum_monitor.capture.sources" --hidden-import "apps.vacuum_monitor.wizard.ui_cv2" --hidden-import "apps.vacuum_monitor.readout.ocr_tesseract" --hidden-import "apps.vacuum_monitor.alerts.email_smtp" apps/vacuum_monitor/main.py
+
+=> setup.exe 만드는 코드

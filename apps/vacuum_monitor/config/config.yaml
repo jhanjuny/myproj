@@ -86,6 +86,19 @@ sampling:
   interval_sec: 1
   excel_export_sec: 600 
 
+
+#for the PC2 real video
+# cameras:
+#   - id: top
+#     input: uvc
+#     index: 0
+#     crop: [ ... ]
+#   - id: bottom
+#     input: uvc
+#     index: 0
+#     crop: [ ... ]
+
+
 cameras:
   - id: top
     input: file
@@ -179,18 +192,55 @@ alerts:
   cooldown_sec: 3600          # 1시간마다 반복 발송
   value_min: 1.0e-20
   value_max: 1.0e+3
+  recovery_email: true
 
 
+
+
+
+# #test code
+
+# alerts:
+#   mode: "log10"
+#   threshold_log10: 1.0      # 10배
+#   baseline_window_n: 20
+#   warmup_n: 5
+#   missing_k: 3
+#   cooldown_sec: 10
+#   value_min: 1.0e-20
+#   value_max: 1.0e+3
 
     # 나머지 SMTP 설정은 네 send_email_smtp 구현에 맞춰 유지
+
   email:
     enabled: true
     to: ["hanjun2217@skku.edu"]
-    from: "hanjun2217@g.skku.edu"
-    subject_prefix: "[VACUUM ALERT]"
-    smtp_host: "smtp.yourdomain.ac.kr"
+
+    smtp_host: "smtp.gmail.com"
     smtp_port: 587
     starttls: true
+
+
     username_env: "VACUUM_SMTP_USER"
     password_env: "VACUUM_SMTP_PASS"
+
+
+
+    subject_prefix: "[VACUUM ALERT]"
+    subject_suffix: "vacuum monitor"
+    debug: false
+
+  # email:
+  #   enabled: true
+  #   to: ["hanjun2217@g.skku.edu"]
+    
+    
+  #   smtp_host: "smtp.gmail.com"
+  #   smtp_port: 587
+  #   starttls: true
+    
+  #   subject_prefix: "[VACUUM ALERT]"
+    
+  #   force_from_login: true   # Gmail 안정성 위해 true 권장
+  #   debug: false             # 문제 생기면 true로 잠깐 켜기
 

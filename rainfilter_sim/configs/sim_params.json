@@ -1,0 +1,42 @@
+{
+    "simulation": {
+      "dt": 0.01,
+      "total_time": 10.0,
+      "gravity": [0, 0, -9.81],
+      "num_particles": 5000,
+      "particle_radius": 0.002,
+      "particle_mass": 0.001
+    },
+    "geometry": {
+      "filter_radius": 0.15,
+      "filter_height": 0.3,
+      "spiral_hole_diameter": 0.025,
+      "spiral_hole_count": 8,
+      "slot_width": 0.005,
+      "slot_count": 12,
+      "protrusion_height": 0.01,
+      "protrusion_count": 16,
+      "spiral_channel_width": 0.03,
+      "spiral_channel_turns": 3
+    },
+    "physics": {
+      "restitution": 0.3,
+      "friction": 0.5,
+      "viscosity": 0.001,
+      "surface_tension": 0.0728
+    },
+    "inflow": {
+      "rate": 0.01,
+      "velocity": [0, 0, -2.0],
+      "position": [0, 0, 0.35],
+      "spread_radius": 0.1
+    },
+    "visualization": {
+      "window_size": [1280, 720],
+      "camera_position": [0.5, 0.5, 0.3],
+      "show_geometry": true,
+      "show_particles": true,
+      "particle_color": "blue",
+      "geometry_opacity": 0.3
+    }
+  }

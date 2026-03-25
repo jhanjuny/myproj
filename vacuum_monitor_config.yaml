@@ -1,0 +1,159 @@
+sampling:
+  interval_sec: 1
+  excel_export_sec: 600
+cameras:
+- id: top
+  input: file
+  source: data/pi_sample.mp4
+  crop:
+  - 87
+  - 431
+  - 724
+  - 172
+- id: bottom
+  input: file
+  source: data/pi_sample.mp4
+  crop:
+  - 73
+  - 641
+  - 889
+  - 730
+rois:
+  top:
+  - name: MG13_1_CH1
+    rect:
+    - 283
+    - 15
+    - 171
+    - 28
+  - name: MG13_1_CH2
+    rect:
+    - 284
+    - 35
+    - 174
+    - 32
+  - name: MG13_2_CH1
+    rect:
+    - 39
+    - 113
+    - 168
+    - 29
+  - name: MG13_2_CH2
+    rect:
+    - 41
+    - 138
+    - 169
+    - 29
+  - name: MG13_3_CH1
+    rect:
+    - 553
+    - 115
+    - 167
+    - 28
+  - name: MG13_3_CH2
+    rect:
+    - 553
+    - 142
+    - 166
+    - 26
+  bottom:
+  - name: AN_HG
+    rect:
+    - 242
+    - 85
+    - 124
+    - 20
+  - name: AN_FG
+    rect:
+    - 242
+    - 128
+    - 128
+    - 23
+  - name: PP_HG
+    rect:
+    - 683
+    - 85
+    - 123
+    - 21
+  - name: PP_FG
+    rect:
+    - 686
+    - 124
+    - 120
+    - 26
+  - name: VV_FG1
+    rect:
+    - 246
+    - 359
+    - 120
+    - 25
+  - name: VV_FG2
+    rect:
+    - 250
+    - 401
+    - 117
+    - 24
+  - name: MN_HG
+    rect:
+    - 685
+    - 356
+    - 119
+    - 21
+  - name: MN_FG
+    rect:
+    - 684
+    - 395
+    - 117
+    - 23
+  - name: LL_HG
+    rect:
+    - 250
+    - 627
+    - 122
+    - 20
+  - name: LL_FG
+    rect:
+    - 253
+    - 668
+    - 118
+    - 23
+  - name: IS_HG
+    rect:
+    - 669
+    - 619
+    - 109
+    - 27
+  - name: IS_FG
+    rect:
+    - 663
+    - 656
+    - 111
+    - 26
+readout:
+  engine: tesseract
+  tesseract_cmd: C:/Users/hanjunpy/AppData/Local/Programs/Tesseract-OCR/tesseract.exe
+  psm: 7
+  whitelist: 0123456789eE+-.
+alerts:
+  threshold_log10: 1.0
+  baseline_window_n: 60
+  warmup_n: 20
+  missing_k: 3
+  skip_outliers: true
+  cooldown_sec: 3600
+  value_min: 1.0e-20
+  value_max: 1000.0
+  recovery_email: true
+  email:
+    enabled: true
+    to:
+    - hanjun2217@skku.edu
+    smtp_host: smtp.gmail.com
+    smtp_port: 587
+    starttls: true
+    username_env: VACUUM_SMTP_USER
+    password_env: VACUUM_SMTP_PASS
+    subject_prefix: '[VACUUM ALERT]'
+    subject_suffix: vacuum monitor
+    debug: false
+    from: your_email@gmail.com

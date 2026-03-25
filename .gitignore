@@ -34,3 +34,5 @@ Thumbs.db
 
 # local machine overrides (DO NOT COMMIT)
 configs/paths.local.json
+
+proc.png

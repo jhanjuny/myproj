@@ -1,114 +1,149 @@
-from __future__ import annotations
-
+# apps/vacuum_monitor/readout/ocr_tesseract.py
+import sys
+import os
 import re
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
 import cv2
 import numpy as np
 
+# pytesseract import 시도 (없으면 None 처리)
 try:
     import pytesseract
-except Exception:
+except ImportError:
     pytesseract = None
 
 
-import os
-import pytesseract
+# --- [핵심] Tesseract 경로 설정 로직 ---
+def setup_tesseract_path():
+    """
+    1. exe 실행 시: exe 옆의 'tesseract_portable/tesseract.exe' 우선 확인
+    2. 없으면: 시스템 기본 경로(C:/Program Files/...) 확인
+    """
+    if pytesseract is None:
+        return
 
-def _set_tesseract_cmd(cfg: dict):
-     # 1) config.yaml에서 지정한 경로 우선
-    cmd = None
-    if isinstance(cfg, dict):
-        cmd = (cfg.get("tesseract") or {}).get("cmd") or cfg.get("tesseract_cmd")
-     # 2) 환경변수로도 가능
-    cmd = cmd or os.environ.get("TESSERACT_CMD")
-     # 3) 최종 적용
-    if cmd:
-        pytesseract.pytesseract.tesseract_cmd = cmd
+    # 1. 기준 경로 설정 (Frozen=exe실행, 아니면 현재파일 기준)
+    if getattr(sys, 'frozen', False):
+        # exe가 있는 폴더
+        base_path = Path(sys.executable).parent
+    else:
+        # 개발 중 (repo root 추정)
+        base_path = Path(__file__).resolve().parents[3]
 
+    # 2. Portable 폴더 우선 탐색
+    portable_path = base_path / "tesseract_portable" / "tesseract.exe"
+    
+    if portable_path.exists():
+        pytesseract.pytesseract.tesseract_cmd = str(portable_path)
+    else:
+        # 3. 없으면 시스템 설치 경로 시도 (Fallback)
+        default_paths = [
+            r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+            r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe'
+        ]
+        for dp in default_paths:
+            if os.path.exists(dp):
+                pytesseract.pytesseract.tesseract_cmd = dp
+                break
 
-
-
-
-_SCI_RE = re.compile(
-    r"(?P<m>\d+(?:\.\d+)?)\s*[eE]\s*(?P<e>[+\-]?\s*\d+)"
-)
-
-_DEC_RE = re.compile(r"(?P<m>\d+(?:\.\d+)?)")
+# 파일 로드 시 경로 설정 즉시 실행
+setup_tesseract_path()
+# ------------------------------------
 
 
 @dataclass
-class ReadoutResult:
+class OcrResult:
     text: str
     value: Optional[float]
+    conf: float
 
 
-def _preprocess(roi_bgr: np.ndarray) -> np.ndarray:
-    # ROI를 OCR 친화적으로 전처리
-    g = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-    g = cv2.resize(g, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-    g = cv2.GaussianBlur(g, (3, 3), 0)
+def preprocess_for_ocr(img: np.ndarray) -> np.ndarray:
+    """OCR 인식률을 높이기 위한 이미지 전처리"""
+    if len(img.shape) == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = img
 
-    # 조명/흔들림에도 견디도록 adaptive threshold
-    th = cv2.adaptiveThreshold(
-        g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 5
+    # 노이즈 제거 및 대비 향상
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    
+    # 이진화 (Adaptive가 보통 게이지/LCD에 유리)
+    binary = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
     )
-
-    # 글자가 흰색/검정색이 뒤집힌 경우를 대비해, 두 버전 중 “더 글자다운” 쪽 선택
-    inv = 255 - th
-    # 간단한 휴리스틱: 흰 픽셀 비율이 너무 크면 뒤집기
-    if (th > 0).mean() > 0.80:
-        th = inv
-
-    return th
+    return binary
 
 
-def _parse_value(text: str) -> Optional[float]:
-    t = text.strip().replace(" ", "")
-    if not t:
+def parse_float(text: str) -> Optional[float]:
+    """텍스트에서 숫자(과학적 표기법 포함) 추출"""
+    # 1. 공백 제거 및 소문자 변환
+    text = text.strip().lower().replace(" ", "")
+    
+    # 2. 숫자, 점, E, -, + 만 남기기
+    cleaned = re.sub(r"[^0-9e\+\-\.]", "", text)
+    
+    # 3. 예외 케이스 처리 (끝에 점이 붙는 경우 등)
+    if cleaned.endswith("."):
+        cleaned = cleaned[:-1]
+
+    try:
+        return float(cleaned)
+    except ValueError:
         return None
 
-    # 장비 상태 텍스트 처리
-    up = t.upper()
-    if "NOSENSOR" in up or "NO" in up and "SENSOR" in up:
-        return None
 
-    # 과학적 표기 파싱 (예: 5.49E-10)
-    m = _SCI_RE.search(t)
-    if m:
-        mant = float(m.group("m"))
-        exp = int(m.group("e").replace(" ", ""))
-        return mant * (10 ** exp)
+def read_value_tesseract(roi_img: np.ndarray, cfg: dict = None) -> OcrResult:
+    """
+    이미지에서 숫자를 읽어 반환.
+    cfg: 호환성을 위해 남겨둠 (내부적으로 사용 안 함)
+    """
+    # pytesseract가 없거나 이미지가 비었으면 빈 결과 반환
+    if (pytesseract is None) or (roi_img is None) or (roi_img.size == 0):
+        return OcrResult("", None, 0.0)
 
-    # 소수/정수만 있는 경우
-    m2 = _DEC_RE.search(t)
-    if m2:
-        return float(m2.group("m"))
+    # 전처리
+    proc_img = preprocess_for_ocr(roi_img)
 
-    return None
+    # Tesseract 설정 (숫자 위주 인식)
+    # --psm 7: 한 줄의 텍스트로 취급
+    # digits: 숫자만 허용 (whitelist)
+    config = r'--oem 3 --psm 7 -c tessedit_char_whitelist=0123456789.eE+-'
 
+    try:
+        # 상세 데이터(신뢰도 포함) 가져오기
+        data = pytesseract.image_to_data(proc_img, config=config, output_type=pytesseract.Output.DICT)
+        
+        # 신뢰도 높은 텍스트만 합치기
+        text_parts = []
+        conf_sum = 0.0
+        conf_cnt = 0
+        
+        n_items = len(data['text'])
+        for i in range(n_items):
+            txt = data['text'][i].strip()
+            # conf가 -1이거나 너무 낮은 값은 제외
+            try:
+                conf = float(data['conf'][i])
+            except:
+                conf = 0.0
+                
+            if txt and conf > 0:
+                text_parts.append(txt)
+                conf_sum += conf
+                conf_cnt += 1
+        
+        full_text = "".join(text_parts)
+        avg_conf = (conf_sum / conf_cnt) if conf_cnt > 0 else 0.0
+        val = parse_float(full_text)
 
-def read_value_tesseract(roi_bgr: np.ndarray, cfg: dict) -> ReadoutResult:
-    _set_tesseract_cmd(cfg)
+        # 구형 코드와의 호환성을 위해 OcrResult 객체가 text, value 속성을 가지도록 함
+        # (위에 정의된 dataclass 사용)
+        return OcrResult(full_text, val, avg_conf)
 
-    if pytesseract is None:
-        return ReadoutResult(text="", value=None)
-
-    r_cfg = (cfg or {}).get("readout", {}) if isinstance(cfg, dict) else {}
-    tcmd = r_cfg.get("tesseract_cmd")
-    psm = int(r_cfg.get("psm", 7))
-    whitelist = r_cfg.get("whitelist", "0123456789eE+-. ")
-
-    if tcmd:
-        pytesseract.pytesseract.tesseract_cmd = tcmd
-
-    img = _preprocess(roi_bgr)
-
-    # psm 7: single text line
-    config = f'--psm {psm} -c tessedit_char_whitelist="{whitelist}"'
-    text = pytesseract.image_to_string(img, config=config)
-    text = text.strip().replace("\n", " ")
-
-    val = _parse_value(text)
-    return ReadoutResult(text=text, value=val)
+    except Exception:
+        # Tesseract 에러 시
+        return OcrResult("", None, 0.0)

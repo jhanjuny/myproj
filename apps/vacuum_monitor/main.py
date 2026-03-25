@@ -1,8 +1,10 @@
+# apps/vacuum_monitor/main.py
+
 # --- MUST be at the very top (before any "from apps..." imports) ---
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]  # .../apps/vacuum_monitor/main.py -> repo root
+REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 # -------------------------------------------------------------------
@@ -10,11 +12,11 @@ if str(REPO_ROOT) not in sys.path:
 import argparse
 import csv
 import math
+import shutil
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import cv2
@@ -22,19 +24,15 @@ import numpy as np
 import yaml
 
 from apps.vacuum_monitor.readout.ocr_tesseract import read_value_tesseract
-from apps.vacuum_monitor.alerts.email_smtp import send_email_smtp
+# [수정됨] ScreenSource 추가
+from apps.vacuum_monitor.capture.sources import FileSource, UvcSource, HikrobotMvsSource, ScreenSource
 
 
-# (선택) 이메일 모듈이 프로젝트에 이미 있다면 이 import 경로를 맞추세요.
-# 없으면 아래 fallback이 동작하며 email_enabled=True여도 실제 발송은 안 됩니다.
 try:
-    from apps.vacuum_monitor.alerts.email_smtp import send_email_smtp  # type: ignore
+    from apps.vacuum_monitor.alerts.email_smtp import send_email_smtp
 except Exception:
     def send_email_smtp(cfg: dict, msg: str) -> None:
-        raise RuntimeError(
-            "send_email_smtp()를 import하지 못했습니다. "
-            "apps/vacuum_monitor/alerts/email_smtp.py의 위치/함수명을 확인하세요."
-        )
+        pass
 
 
 def clamp_rect(x: int, y: int, w: int, h: int, W: int, H: int) -> Tuple[int, int, int, int]:
@@ -66,86 +64,40 @@ def draw_rois(frame: np.ndarray, rois, color=(0, 255, 0)) -> np.ndarray:
     return out
 
 
-def resolve_app_relative(app_dir: Path, p: str) -> Path:
-    """
-    - 절대경로면 그대로
-    - "data/xxx.mp4" 같이 오면 apps/vacuum_monitor 기준
-    - "apps/vacuum_monitor/data/xxx.mp4" 같이 이미 앱 경로를 포함하면 repo 루트 기준
-    """
+def resolve_app_relative(app_dir: Path, p: str):
+    # [수정됨] 웹 주소(rtsp, http)인 경우 경로 변환 없이 그대로 문자열로 반환
+    if "://" in str(p):
+        return str(p)
+        
     pp = Path(p)
     if pp.is_absolute():
         return pp
-
     repo_root = app_dir.parent.parent
     parts = [x.lower() for x in pp.parts]
     if len(parts) >= 2 and parts[0] == "apps" and parts[1] == app_dir.name.lower():
         return (repo_root / pp).resolve()
-
     return (app_dir / pp).resolve()
 
 
-class LoopingVideoCapture:
-    def __init__(self, source):
-        self.source = source
-
-        # int(카메라 인덱스)인 경우 str로 바꾸면 깨질 수 있으므로 분기
-        if isinstance(source, int):
-            self.cap = cv2.VideoCapture(source)
-        else:
-            self.cap = cv2.VideoCapture(str(source))
-
-        if not self.cap.isOpened():
-            raise RuntimeError(f"Cannot open source: {source}")
-
-    def read(self) -> np.ndarray:
-        ret, frame = self.cap.read()
-        if not ret:
-            # 파일이면 처음으로 되감기
-            if isinstance(self.source, (str, Path)):
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = self.cap.read()
-
-        if not ret:
-            raise RuntimeError(f"Cannot read frame from source: {self.source}")
-
-        return frame
-
-    def release(self) -> None:
-        self.cap.release()
-
-
 def try_aruco_rectify(frame: np.ndarray, ar_cfg: Optional[dict]) -> np.ndarray:
-    """
-    ar_cfg 예:
-      dict: DICT_4X4_50
-      ids: [0,1,2,3]   (순서 가정: TL, TR, BR, BL)
-      output_size: [1200, 400]  (W,H)
-    실패하면 output_size로 resize만 수행(또는 그대로 반환).
-    """
     if not ar_cfg:
         return frame
-
     out_size = ar_cfg.get("output_size", None)
     if out_size is None:
         return frame
-
     W_out, H_out = int(out_size[0]), int(out_size[1])
-
     aruco_mod = getattr(cv2, "aruco", None)
     if aruco_mod is None:
         return cv2.resize(frame, (W_out, H_out))
-
+    
     dict_name = ar_cfg.get("dict", "DICT_4X4_50")
     ids_needed = ar_cfg.get("ids", [])
     if len(ids_needed) < 4:
         return cv2.resize(frame, (W_out, H_out))
-
     try:
         dictionary = aruco_mod.getPredefinedDictionary(getattr(aruco_mod, dict_name))
     except Exception:
         return cv2.resize(frame, (W_out, H_out))
-
-    # OpenCV 버전 호환
     try:
         parameters = aruco_mod.DetectorParameters()
         detector = aruco_mod.ArucoDetector(dictionary, parameters)
@@ -153,34 +105,61 @@ def try_aruco_rectify(frame: np.ndarray, ar_cfg: Optional[dict]) -> np.ndarray:
     except Exception:
         parameters = aruco_mod.DetectorParameters_create()
         corners, ids, _ = aruco_mod.detectMarkers(frame, dictionary, parameters=parameters)
-
     if ids is None or len(ids) == 0:
         return cv2.resize(frame, (W_out, H_out))
-
     id_to_center = {}
     for c, i in zip(corners, ids.flatten()):
-        pts = c[0]  # (4,2)
+        pts = c[0]
         center = pts.mean(axis=0)
         id_to_center[int(i)] = center
-
     if not all(int(i) in id_to_center for i in ids_needed[:4]):
         return cv2.resize(frame, (W_out, H_out))
-
     src = np.array([id_to_center[int(i)] for i in ids_needed[:4]], dtype=np.float32)
     dst = np.array([[0, 0], [W_out - 1, 0], [W_out - 1, H_out - 1], [0, H_out - 1]], dtype=np.float32)
-
     M = cv2.getPerspectiveTransform(src, dst)
-    warped = cv2.warpPerspective(frame, M, (W_out, H_out))
-    return warped
+    return cv2.warpPerspective(frame, M, (W_out, H_out))
 
 
 def ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
+def _perform_cleanup(output_base: Path, current_run_dir: Path, retention_days: int) -> None:
+    if retention_days <= 0:
+        return
+        
+    cutoff_time = time.time() - (retention_days * 86400)
+    print(f"[Cleanup] Running maintenance (Threshold: {retention_days} days)...")
+
+    # 1. 과거 실행 폴더 청소
+    if output_base.exists():
+        for p in output_base.iterdir():
+            if p.is_dir() and p.name.startswith("run_"):
+                if p.resolve() == current_run_dir.resolve():
+                    continue
+                try:
+                    if p.stat().st_mtime < cutoff_time:
+                        shutil.rmtree(p)
+                except Exception as e:
+                    print(f"  [Error] Failed deleting folder {p.name}: {e}")
+
+    # 2. 현재 실행 폴더 내부 파일 청소
+    rois_base = current_run_dir / "rois"
+    if rois_base.exists():
+        for cam_dir in rois_base.iterdir():
+            if cam_dir.is_dir():
+                for img_file in cam_dir.glob("*.png"):
+                    try:
+                        if img_file.stat().st_mtime < cutoff_time:
+                            img_file.unlink()
+                    except Exception:
+                        pass
+    print("[Cleanup] Done.")
+
+
 @dataclass
 class IssueInfo:
-    kind: str  # "MISSING" | "ANOMALY"
+    kind: str
     since_ts: float
     last_seen_ts: float
     last_value: Optional[float]
@@ -195,118 +174,148 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="apps/vacuum_monitor/config/config.yaml")
     ap.add_argument("--no_display", action="store_true")
-    ap.add_argument("--dump_first_frames", action="store_true", help="Save first raw/cropped frames then exit")
-    ap.add_argument("--max_samples", type=int, default=0, help="Stop after N sampling ticks (0 = no limit)")
-    ap.add_argument("--duration_sec", type=float, default=0.0, help="Stop after N seconds (0 = no limit)")
-    ap.add_argument("--save_roi_images", action="store_true", help="Save ROI PNGs under run_dir/rois (debug)")
+    ap.add_argument("--dump_first_frames", action="store_true")
+    ap.add_argument("--max_samples", type=int, default=0)
+    ap.add_argument("--duration_sec", type=float, default=0.0)
+    ap.add_argument("--save_roi_images", action="store_true")
+    ap.add_argument("--runtime_config", default="")
+    ap.add_argument("--wizard", action="store_true")
+    ap.add_argument("--retention_days", type=int, default=30, help="Log retention days")
+    
     args = ap.parse_args()
 
     repo_root = Path(__file__).resolve().parents[2]
     app_dir = Path(__file__).resolve().parent
 
-    cfg_path = (repo_root / args.config).resolve() if not Path(args.config).is_absolute() else Path(args.config)
-    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    def _default_runtime_config_path(repo_root: Path) -> Path:
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent / "vacuum_monitor_config.yaml"
+        return repo_root / "vacuum_monitor_config.yaml"
 
-    sampling = cfg.get("sampling", {})
-    interval_sec = float(sampling.get("interval_sec", 1))
-    excel_export_sec = float(sampling.get("excel_export_sec", 600))
+    runtime_path = Path(args.runtime_config).resolve() if args.runtime_config else _default_runtime_config_path(repo_root)
+    
+    if not runtime_path.exists():
+        print("="*60)
+        print(f"[Error] Configuration file not found!")
+        print(f"Path: {runtime_path}")
+        print("\nPlease run 'VacuumSetup.exe' first to create settings.")
+        print("="*60)
+        time.sleep(5)
+        return
 
-    cameras = cfg.get("cameras", [])
-    rois_cfg = cfg.get("rois", {})
+    if args.wizard:
+        print("[Info] Use 'VacuumSetup.exe' to change settings.")
+        time.sleep(3)
+        return
+    
+    cfg = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
 
-    # outputs
-    run_dir = repo_root / "outputs" / "vacuum_monitor" / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    output_base = repo_root / "outputs" / "vacuum_monitor"
+    ensure_dir(output_base)
+
+    run_dir = output_base / f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     ensure_dir(run_dir)
     ensure_dir(run_dir / "frames")
     ensure_dir(run_dir / "rois")
 
-    # CSV log
+    if args.retention_days > 0:
+        _perform_cleanup(output_base, run_dir, args.retention_days)
+
+    sampling = cfg.get("sampling", {})
+    interval_sec = float(sampling.get("interval_sec", 1))
+    excel_export_sec = float(sampling.get("excel_export_sec", 600))
+    cameras = cfg.get("cameras", [])
+    rois_cfg = cfg.get("rois", {})
+    alerts_cfg = cfg.get("alerts", {}) if isinstance(cfg, dict) else {}
+
     csv_path = run_dir / "records.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["ts", "camera_id", "roi_name", "value", "roi_path"])
 
-    # alerts config
-    alerts_cfg = cfg.get("alerts", {}) if isinstance(cfg, dict) else {}
-
     cooldown_sec = int(alerts_cfg.get("cooldown_sec", 3600))
     baseline_window_n = int(alerts_cfg.get("baseline_window_n", 60))
     warmup_n = int(alerts_cfg.get("warmup_n", 20))
-    threshold_log10 = float(alerts_cfg.get("threshold_log10", 1.0))  # 1.0 => 10배
+    threshold_log10 = float(alerts_cfg.get("threshold_log10", 1.0))
     skip_outliers = bool(alerts_cfg.get("skip_outliers", True))
-
+    anomaly_k = int(alerts_cfg.get("anomaly_k", 2))
     value_min = float(alerts_cfg.get("value_min", 1e-20))
     value_max = float(alerts_cfg.get("value_max", 1e3))
-
-    # "원래 뜨다가 안 뜨면" 판단용 (연속 invalid)
     missing_k = int(alerts_cfg.get("missing_k", 3))
-
+    
     email_cfg = (alerts_cfg.get("email", {}) or {}) if isinstance(alerts_cfg, dict) else {}
     email_enabled = bool(email_cfg.get("enabled", False))
+    recovery_email = bool(alerts_cfg.get("recovery_email", True))
 
     alert_path = run_dir / "alerts.log"
     alert_path.touch(exist_ok=True)
 
-    # state per ROI
     baseline_logs: Dict[Tuple[str, str], deque] = defaultdict(lambda: deque(maxlen=baseline_window_n))
-    seen_valid = defaultdict(int)       # 유효값을 읽은 누적 횟수(= "원래 떴다" 판단)
-    invalid_streak = defaultdict(int)   # 연속 invalid(=None/범위밖) 횟수
+    seen_valid = defaultdict(int)
+    invalid_streak = defaultdict(int)
     active_issues: Dict[Tuple[str, str], IssueInfo] = {}
+    anomaly_streak = defaultdict(int)
+    last_summary_sent = 0.0
 
-    last_summary_sent = 0.0  # 문제 상태 지속 시 1시간 간격 재발송 제어용
-
-    def log_and_maybe_email(msg: str) -> None:
+    def log_and_maybe_email(msg: str):
         with alert_path.open("a", encoding="utf-8") as af:
             af.write(msg + "\n")
-        if email_enabled:
+        if not email_enabled:
+            return
+        try:
             send_email_smtp(cfg, msg)
+        except Exception as e:
+            err = f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} EMAIL_ERROR {type(e).__name__}: {e}"
+            with alert_path.open("a", encoding="utf-8") as af:
+                af.write(err + "\n")
 
-    # 캡처를 소스별로 1번만 열기 (동일 source면 top/bottom이 같은 프레임을 공유)
-    caps: Dict[str, LoopingVideoCapture] = {}
+    caps = {}
     cam_specs = []
+
     for cam in cameras:
         cam_id = cam["id"]
-        input_type = cam.get("input", "file")
-        source = cam.get("source", "")
+        input_type = str(cam.get("input", "file")).lower()
 
         if input_type == "file":
+            source = cam.get("source", "")
             src_path = resolve_app_relative(app_dir, source)
             cap_key = f"file::{str(src_path)}"
             if cap_key not in caps:
-                caps[cap_key] = LoopingVideoCapture(str(src_path))
-        else:
-            src = int(source) if str(source).isdigit() else source
-            cap_key = f"cam::{str(src)}"
+                caps[cap_key] = FileSource(src_path, loop=True)
+        elif input_type in ("uvc", "webcam"):
+            index = int(cam.get("index", 0))
+            cap_key = f"uvc::{index}"
             if cap_key not in caps:
-                caps[cap_key] = LoopingVideoCapture(src)
+                caps[cap_key] = UvcSource(index=index)
+        
+        # [수정됨] 화면 캡처 모드 추가
+        elif input_type == "screen":
+            monitor_idx = int(cam.get("monitor", 1))
+            cap_key = f"screen::{monitor_idx}"
+            if cap_key not in caps:
+                caps[cap_key] = ScreenSource(monitor_idx=monitor_idx)
 
-        crop_rect = cam.get("crop", None)
-        ar_cfg = cam.get("aruco", None)
+        elif input_type in ("mvs", "hikrobot", "hik"):
+            cap_key = f"mvs::{cam.get('device', 'default')}"
+            if cap_key not in caps:
+                caps[cap_key] = HikrobotMvsSource(cam)
+        else:
+            raise ValueError(f"Unknown camera input type: {input_type}")
 
-        cam_specs.append(
-            {
-                "id": cam_id,
-                "cap_key": cap_key,
-                "crop": crop_rect,
-                "aruco": ar_cfg,
-                "rois": rois_cfg.get(cam_id, []),
-            }
-        )
+        cam_specs.append({
+            "id": cam_id,
+            "cap_key": cap_key,
+            "crop": cam.get("crop", None),
+            "aruco": cam.get("aruco", None),
+            "rois": rois_cfg.get(cam_id, []),
+        })
 
-    # 첫 프레임 덤프(좌표 튜닝용)
     if args.dump_first_frames:
         for key, cap in caps.items():
             frame = cap.read()
-            out_path = run_dir / "frames" / f"first_frame_{key.replace(':', '_').replace('\\', '_').replace('/', '_')}.png"
-            cv2.imwrite(str(out_path), frame)
-
-        for spec in cam_specs:
-            frame = caps[spec["cap_key"]].read()
-            cropped = crop_frame(frame, spec["crop"])
-            warped = try_aruco_rectify(cropped, spec["aruco"])
-            out_path = run_dir / "frames" / f"first_{spec['id']}_processed.png"
-            cv2.imwrite(str(out_path), warped)
-
+            if frame is not None:
+                out_path = run_dir / "frames" / f"first_frame_{key.replace(':', '_').replace(r'\\', '_').replace('/', '_')}.png"
+                cv2.imwrite(str(out_path), frame)
         for cap in caps.values():
             cap.release()
         print(f"[dump] saved first frames under: {run_dir}")
@@ -314,30 +323,44 @@ def main() -> None:
 
     last_sample_t = 0.0
     last_export_t = 0.0
+    
+    last_cleanup_t = time.time()
+    cleanup_interval_sec = 3600
+
+    print(f"[Start] Monitoring started. Output: {run_dir}")
+    print(f"[Config] Retention: {args.retention_days} days (Check every 1h)")
 
     try:
         start_t = time.time()
         sample_count = 0
 
         while True:
-            frames_by_key = {k: cap.read() for k, cap in caps.items()}
+            frames_by_key = {}
+            for k, cap in caps.items():
+                try:
+                    frames_by_key[k] = cap.read()
+                except Exception:
+                    frames_by_key[k] = None
 
             now = time.time()
             do_sample = (now - last_sample_t) >= interval_sec
             do_export = (now - last_export_t) >= excel_export_sec
+            
+            if args.retention_days > 0 and (now - last_cleanup_t) >= cleanup_interval_sec:
+                _perform_cleanup(output_base, run_dir, args.retention_days)
+                last_cleanup_t = now
 
             if do_sample:
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                # 이번 tick에서 “현재 문제”로 판정된 키 집합(정상화 판단용)
                 current_bad = set()
 
-                # CSV append는 tick마다 열어서 안정성 확보
                 with csv_path.open("a", newline="", encoding="utf-8") as f:
                     w = csv.writer(f)
 
                     for spec in cam_specs:
-                        raw = frames_by_key[spec["cap_key"]]
+                        raw = frames_by_key.get(spec["cap_key"])
+                        if raw is None: continue
+
                         view = crop_frame(raw, spec["crop"])
                         view = try_aruco_rectify(view, spec["aruco"])
 
@@ -350,21 +373,24 @@ def main() -> None:
                             key = (spec["id"], name)
 
                             roi_img = crop_frame(view, rect)
-
+                            
                             roi_path_str = ""
                             if args.save_roi_images:
-                                roi_path = cam_roi_dir / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{name}.png"
+                                fname = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{name}.png"
+                                roi_path = cam_roi_dir / fname
                                 cv2.imwrite(str(roi_path), roi_img)
                                 roi_path_str = str(roi_path)
 
-                            res = read_value_tesseract(roi_img, cfg)
-                            val = res.value
+                            try:
+                                res = read_value_tesseract(roi_img, cfg)
+                                val = res.value
+                            except Exception:
+                                val = None
+                                res = type('obj', (object,), {'text': ''})
 
-                            # (항상) CSV 기록: None이면 value 칸은 빈칸
                             val_str = "" if (val is None) else f"{val:.6g}"
                             w.writerow([ts, spec["id"], name, val_str, roi_path_str])
 
-                            # ---- 유효성 판정 ----
                             is_valid = (
                                 (val is not None)
                                 and (val > 0)
@@ -374,136 +400,112 @@ def main() -> None:
 
                             if not is_valid:
                                 invalid_streak[key] += 1
-
-                                # "아예 못읽는 값 무시" 정책:
-                                #  - 이전에 정상 운용(=baseline warmup 이상)을 경험한 ROI만 missing 장애 대상으로 본다.
+                                anomaly_streak[key] = 0
                                 had_good = (len(baseline_logs[key]) >= warmup_n)
-
                                 if had_good and invalid_streak[key] >= missing_k:
                                     current_bad.add(key)
                                     prev = active_issues.get(key)
                                     if prev is None or prev.kind != "MISSING":
                                         active_issues[key] = IssueInfo(
-                                            kind="MISSING",
-                                            since_ts=now,
-                                            last_seen_ts=now,
-                                            last_value=None,
-                                            baseline=None,
-                                            ratio=None,
-                                            text=res.text or "",
-                                            roi_path=roi_path_str,
-                                            streak=invalid_streak[key],
+                                            kind="MISSING", since_ts=now, last_seen_ts=now,
+                                            last_value=None, baseline=None, ratio=None,
+                                            text=getattr(res, 'text', ''), roi_path=roi_path_str,
+                                            streak=invalid_streak[key]
                                         )
                                     else:
                                         prev.last_seen_ts = now
-                                        prev.text = res.text or prev.text
+                                        prev.text = getattr(res, 'text', '') or prev.text
                                         prev.roi_path = roi_path_str or prev.roi_path
                                         prev.streak = invalid_streak[key]
-
-                                # invalid이면 baseline/이상탐지 없음
                                 continue
 
-                            # valid인 경우
                             invalid_streak[key] = 0
                             seen_valid[key] += 1
-
                             dq = baseline_logs[key]
-                            baseline_log = None
-                            if len(dq) >= warmup_n:
-                                baseline_log = sum(dq) / len(dq)
+                            baseline_log = sum(dq)/len(dq) if len(dq) >= warmup_n else None
 
-                            # ---- 이상(10배) 판정: baseline이 준비된 뒤만 ----
                             is_anomaly = False
                             baseline_val = None
                             ratio = None
                             if baseline_log is not None:
                                 logv = math.log10(val)
-                                diff_log10 = abs(logv - baseline_log)
-                                if diff_log10 >= threshold_log10:  # 1.0 => 10배
+                                if abs(logv - baseline_log) >= threshold_log10:
                                     is_anomaly = True
                                     baseline_val = 10 ** baseline_log
                                     ratio = (val / baseline_val) if baseline_val > 0 else float("inf")
 
                             if is_anomaly:
+                                anomaly_streak[key] += 1
+                            else:
+                                anomaly_streak[key] = 0
+
+                            if is_anomaly and anomaly_streak[key] >= anomaly_k:
                                 current_bad.add(key)
                                 prev = active_issues.get(key)
                                 if prev is None or prev.kind != "ANOMALY":
                                     active_issues[key] = IssueInfo(
-                                        kind="ANOMALY",
-                                        since_ts=now,
-                                        last_seen_ts=now,
-                                        last_value=val,
-                                        baseline=baseline_val,
-                                        ratio=ratio,
-                                        text=res.text or "",
-                                        roi_path=roi_path_str,
-                                        streak=0,
+                                        kind="ANOMALY", since_ts=now, last_seen_ts=now,
+                                        last_value=val, baseline=baseline_val, ratio=ratio,
+                                        text=getattr(res, 'text', ''), roi_path=roi_path_str,
+                                        streak=anomaly_streak[key]
                                     )
                                 else:
                                     prev.last_seen_ts = now
                                     prev.last_value = val
                                     prev.baseline = baseline_val
                                     prev.ratio = ratio
-                                    prev.text = res.text or prev.text
+                                    prev.text = getattr(res, 'text', '') or prev.text
                                     prev.roi_path = roi_path_str or prev.roi_path
+                                    prev.streak = anomaly_streak[key]
 
-                                # outlier로 baseline 오염 방지
-                                if skip_outliers:
-                                    continue
+                            if is_anomaly and skip_outliers:
+                                continue
 
-                            # ---- baseline 업데이트(정상 값만, 딱 1회) ----
                             dq.append(math.log10(val))
 
-                # ---- 정상화 처리: 이번 tick에 bad로 안 잡힌 active issue는 제거 ----
+                recovered = []
                 for k in list(active_issues.keys()):
                     if k not in current_bad:
-                        # 정상화되면 알람 중지
+                        recovered.append((k, active_issues[k]))
                         del active_issues[k]
 
-                # ---- 요약 알림(메일/로그): 문제 지속 시 cooldown마다 반복 ----
+                if recovered and recovery_email:
+                    lines = [f"{ts} VACUUM RECOVERED count={len(recovered)}"]
+                    for (cam_id, roi_name), info in sorted(recovered, key=lambda x: x[0]):
+                        dur_sec = max(0.0, now - float(info.since_ts))
+                        if info.kind == "MISSING":
+                            lines.append(f"- RECOVERED MISSING {cam_id}/{roi_name} duration={dur_sec:.0f}s")
+                        else:
+                            lines.append(f"- RECOVERED ANOMALY {cam_id}/{roi_name} duration={dur_sec:.0f}s value={info.last_value}")
+                    log_and_maybe_email("\n".join(lines))
+
                 if active_issues:
-                    # 첫 발생은 즉시, 이후는 cooldown_sec 간격
                     if (last_summary_sent == 0.0) or ((now - last_summary_sent) >= cooldown_sec):
-                        lines = [f"{ts} VACUUM ALERT active={len(active_issues)} cooldown={cooldown_sec}s"]
+                        lines = [f"{ts} VACUUM ALERT active={len(active_issues)}"]
                         for (cam_id, roi_name) in sorted(active_issues.keys()):
                             info = active_issues[(cam_id, roi_name)]
                             if info.kind == "MISSING":
-                                lines.append(
-                                    f"- MISSING camera={cam_id} roi={roi_name} "
-                                    f"streak={info.streak} text={info.text!r} roi_path={info.roi_path}"
-                                )
+                                lines.append(f"- MISSING {cam_id}/{roi_name} streak={info.streak} text={info.text!r}")
                             else:
-                                v = info.last_value
-                                b = info.baseline
-                                r = info.ratio
-                                lines.append(
-                                    f"- ANOMALY camera={cam_id} roi={roi_name} "
-                                    f"value={v:.6g} baseline={b:.6g} ratio={r:.3g} "
-                                    f"text={info.text!r} roi_path={info.roi_path}"
-                                )
-
-                        msg = "\n".join(lines)
-                        log_and_maybe_email(msg)
+                                lines.append(f"- ANOMALY {cam_id}/{roi_name} val={info.last_value} ratio={info.ratio:.1f}")
+                        log_and_maybe_email("\n".join(lines))
                         last_summary_sent = now
                 else:
-                    # 전부 정상화되면 타이머 리셋(다음 장애는 즉시 발송)
                     last_summary_sent = 0.0
 
                 last_sample_t = now
                 sample_count += 1
-
-                # 종료 조건: 샘플 횟수
                 if args.max_samples > 0 and sample_count >= args.max_samples:
                     break
 
-            # 디스플레이
             if not args.no_display:
                 for spec in cam_specs:
-                    raw = frames_by_key[spec["cap_key"]]
+                    raw = frames_by_key.get(spec["cap_key"])
+                    if raw is None: continue
                     view = crop_frame(raw, spec["crop"])
                     view = try_aruco_rectify(view, spec["aruco"])
                     disp = draw_rois(view, spec["rois"])
-                    cv2.imshow(f"vacuum_monitor::{spec['id']}", disp)
+                    cv2.imshow(f"monitor::{spec['id']}", disp)
 
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
@@ -511,23 +513,23 @@ def main() -> None:
             else:
                 time.sleep(0.01)
 
-            # 종료 조건: 전체 실행 시간
             if args.duration_sec > 0 and (time.time() - start_t) >= args.duration_sec:
                 break
-
-            # export tick
+            
             if do_export:
                 last_export_t = now
 
     finally:
         for cap in caps.values():
-            cap.release()
+            try:
+                cap.release()
+            except Exception:
+                pass
         try:
             cv2.destroyAllWindows()
         except Exception:
             pass
-        print(f"[done] logs/rois saved under: {run_dir}")
-
+        print(f"[Done] Logs saved in: {run_dir}")
 
 if __name__ == "__main__":
     main()

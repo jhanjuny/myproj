@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Optional, Tuple
+
+import cv2
+import numpy as np
+
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
+
+
+import os
+import pytesseract
+
+
+
+import re
+from typing import Optional, Tuple
+
+_SENSOR_ERR_PAT = re.compile(r"(no\s*sensor|sensor\s*break|break|error)", re.IGNORECASE)
+
+def _normalize_ocr_text(s: str) -> str:
+    if s is None:
+        return ""
+    s = s.strip()
+
+    # 흔한 OCR 잡음 제거/치환
+    s = s.replace(" ", "")
+    s = s.replace(",", ".")
+    s = s.replace("—", "-").replace("–", "-").replace("−", "-")
+
+    # 따옴표/파이프 등 제거
+    s = re.sub(r"[\"\'\|\`]", "", s)
+
+    # 숫자/지수 표현에 필요 없는 문자 제거(일단 남기되, E/e는 유지)
+    # (여기서는 널널하게 두고, 아래에서 한 번 더 정리)
+    return s
+
+def _parse_sci_like(text_raw: str) -> Tuple[str, Optional[float]]:
+    """
+    OCR 결과 문자열에서 과학표기 숫자를 최대한 복구해서 float로 파싱.
+    반환: (clean_text, value or None)
+    """
+    s0 = text_raw or ""
+    if _SENSOR_ERR_PAT.search(s0):
+        return s0, None
+
+    s = _normalize_ocr_text(s0)
+
+    # e/E 앞에 붙는 쓸데없는 점 제거: "1.89.E-8" -> "1.89E-8"
+    s = re.sub(r"\.(?=[eE])", "", s)
+
+    # 지수 뒤에 붙은 잔여 꼬리 제거: "9.49e-10." / "64.39e-09.107" -> "9.49e-10" / "64.39e-09"
+    s = re.sub(r"([eE][+\-]?\d+)\..*$", r"\1", s)
+
+    # 허용 문자만 남기기
+    s = re.sub(r"[^0-9eE+\-\.]", "", s)
+
+    # "e0" 같은 케이스는 숫자로 보지 않게 처리
+    if re.fullmatch(r"[eE][+\-]?\d+", s or ""):
+        return s, None
+
+    # 후보 토큰 추출(여러 토큰이 잡히면 지수 포함/길이 우선)
+    toks = re.findall(r"[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?", s)
+    if not toks:
+        return s, None
+
+    toks.sort(key=lambda t: (("e" in t.lower()), len(t)), reverse=True)
+    cand = toks[0].replace("E", "e")
+
+    # mantissa가 정수로만 길게 나오고 지수가 있으면, "131e-02" -> "1.31e-02" 같은 복구 시도
+    m = re.fullmatch(r"([+\-]?)(\d{2,})(e[+\-]?\d+)", cand, flags=re.IGNORECASE)
+    if m:
+        sign, digits, exp = m.group(1), m.group(2), m.group(3)
+        cand = f"{sign}{digits[0]}.{digits[1:]}{exp.lower()}"
+
+    try:
+        return s, float(cand)
+    except Exception:
+        return s, None
+
+
+
+
+
+
+def _set_tesseract_cmd(cfg: dict):
+     # 1) config.yaml에서 지정한 경로 우선
+    cmd = None
+    if isinstance(cfg, dict):
+        cmd = (cfg.get("tesseract") or {}).get("cmd") or cfg.get("tesseract_cmd")
+     # 2) 환경변수로도 가능
+    cmd = cmd or os.environ.get("TESSERACT_CMD")
+     # 3) 최종 적용
+    if cmd:
+        pytesseract.pytesseract.tesseract_cmd = cmd
+
+
+
+
+
+_SCI_RE = re.compile(
+    r"(?P<m>\d+(?:\.\d+)?)\s*[eE]\s*(?P<e>[+\-]?\s*\d+)"
+)
+
+_DEC_RE = re.compile(r"(?P<m>\d+(?:\.\d+)?)")
+
+
+@dataclass
+class ReadoutResult:
+    text: str
+    value: Optional[float]
+
+
+def _preprocess(roi_bgr: np.ndarray) -> np.ndarray:
+    # ROI를 OCR 친화적으로 전처리
+    g = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
+    g = cv2.resize(g, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+    g = cv2.GaussianBlur(g, (3, 3), 0)
+
+    # 조명/흔들림에도 견디도록 adaptive threshold
+    th = cv2.adaptiveThreshold(
+        g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 5
+    )
+
+    # 글자가 흰색/검정색이 뒤집힌 경우를 대비해, 두 버전 중 “더 글자다운” 쪽 선택
+    inv = 255 - th
+    # 간단한 휴리스틱: 흰 픽셀 비율이 너무 크면 뒤집기
+    if (th > 0).mean() > 0.80:
+        th = inv
+
+    return th
+
+
+def _parse_value(text: str) -> Optional[float]:
+    t = text.strip().replace(" ", "")
+    if not t:
+        return None
+
+    # 장비 상태 텍스트 처리
+    up = t.upper()
+    if "NOSENSOR" in up or "NO" in up and "SENSOR" in up:
+        return None
+
+    # 과학적 표기 파싱 (예: 5.49E-10)
+    m = _SCI_RE.search(t)
+    if m:
+        mant = float(m.group("m"))
+        exp = int(m.group("e").replace(" ", ""))
+        return mant * (10 ** exp)
+
+    # 소수/정수만 있는 경우
+    m2 = _DEC_RE.search(t)
+    if m2:
+        return float(m2.group("m"))
+
+    return None
+
+
+def read_value_tesseract(roi_bgr: np.ndarray, cfg: dict) -> ReadoutResult:
+    _set_tesseract_cmd(cfg)
+
+    if pytesseract is None:
+        return ReadoutResult(text="", value=None)
+
+    r_cfg = (cfg or {}).get("readout", {}) if isinstance(cfg, dict) else {}
+    tcmd = r_cfg.get("tesseract_cmd")
+    psm = int(r_cfg.get("psm", 7))
+    whitelist = r_cfg.get("whitelist", "0123456789eE+-. ")
+
+    if tcmd:
+        pytesseract.pytesseract.tesseract_cmd = tcmd
+
+    img = _preprocess(roi_bgr)
+
+    # psm 7: single text line
+    # config = f'--psm {psm} -c tessedit_char_whitelist="{whitelist}"'
+    
+
+    # text = pytesseract.image_to_string(img, config=config)
+    # text = text.strip().replace("\n", " ")
+
+    # val = _parse_value(text)
+    # return ReadoutResult(text=text, value=val)
+
+    
+    config = f'--oem 3 --psm {psm} -c tessedit_char_whitelist="{whitelist}"'
+
+    text = pytesseract.image_to_string(img, config=config)
+
+    # clean_text, val = _parse_sci_like(text)
+    # if val is None:
+    #     val = _parse_value(clean_text)  # 또는 _parse_value(text)
+
+    # return ReadoutResult(text=clean_text, value=val)
+
+
+    clean_text, val = _parse_sci_like(text)
+    # fallback 제거: 이상한 문자열을 숫자로 만들지 않음
+    return ReadoutResult(text=clean_text, value=val)
+

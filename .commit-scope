@@ -1,0 +1,3 @@
+# Allowed commit paths for the local pre-commit guard.
+# One path prefix per line.
+sample_ml_test/

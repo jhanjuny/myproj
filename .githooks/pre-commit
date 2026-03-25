@@ -1,0 +1,65 @@
+#!/bin/sh
+
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+scope_file="$repo_root/.commit-scope"
+
+if [ ! -f "$scope_file" ]; then
+  exit 0
+fi
+
+allowed_paths=""
+while IFS= read -r line || [ -n "$line" ]; do
+  case "$line" in
+    ""|\#*)
+      continue
+      ;;
+    *)
+      allowed_paths="$allowed_paths
+$line"
+      ;;
+  esac
+done < "$scope_file"
+
+if [ -z "$allowed_paths" ]; then
+  exit 0
+fi
+
+staged_files="$(git diff --cached --name-only --diff-filter=ACMRD)"
+
+if [ -z "$staged_files" ]; then
+  exit 0
+fi
+
+for file in $staged_files; do
+  case "$file" in
+    .commit-scope|.githooks/pre-commit)
+      continue
+      ;;
+  esac
+
+  allowed=false
+  OLD_IFS="$IFS"
+  IFS='
+'
+  for prefix in $allowed_paths; do
+    case "$file" in
+      "$prefix"*)
+        allowed=true
+        break
+        ;;
+    esac
+  done
+  IFS="$OLD_IFS"
+
+  if [ "$allowed" = false ]; then
+    echo "Commit blocked by .commit-scope"
+    echo "Staged path outside allowed scope: $file"
+    echo "Allowed prefixes:"
+    printf '%s\n' "$allowed_paths" | sed '/^$/d'
+    exit 1
+  fi
+done
+
+exit 0
