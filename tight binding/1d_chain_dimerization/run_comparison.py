@@ -444,12 +444,17 @@ def write_formula_html(path: Path, t: float, delta: float, t1: float, t2: float)
 </head>
 <body>
   <h1>1D Chain Calculation Formulas</h1>
-  <p>This file summarizes the tight-binding equations used to generate the band and DOS plots for the uniform chain and the dimerized chain.</p>
+  <p>This file writes out the actual mathematical pipeline behind the plots: Hamiltonian, eigenvalues, Brillouin-zone integrals, and the discrete approximations used in the code.</p>
 
   <h2>1. Uniform Chain</h2>
   <div class="equation">H(k) = -2 t cos(k)</div>
   <div class="equation">E(k) = -2 t cos(k)</div>
-  <p>For this run, <strong>t = {t:.6f}</strong>.</p>
+  <div class="equation">
+    D(E) = (1 / 2&pi;) &int;<sub>-&pi;</sub><sup>&pi;</sup> &delta;(E + 2 t cos k) dk
+  </div>
+  <div class="equation">
+    D(E) = 1 / [&pi; &radic;(4 t<sup>2</sup> - E<sup>2</sup>)] , &nbsp; |E| &lt; 2|t|
+  </div>
 
   <h2>2. Dimerized Chain</h2>
   <p>The dimerized chain uses two alternating nearest-neighbor hoppings:</p>
@@ -467,13 +472,38 @@ def write_formula_html(path: Path, t: float, delta: float, t1: float, t2: float)
     E<sub>&plusmn;</sub>(k) = &plusmn; &radic;(t<sub>1</sub><sup>2</sup> + t<sub>2</sub><sup>2</sup> + 2 t<sub>1</sub> t<sub>2</sub> cos(k))
   </div>
 
-  <h2>3. Band Gap</h2>
+  <h2>3. Band Gap Derivation</h2>
+  <div class="equation">
+    E<sub>g</sub> = min<sub>k</sub> [E<sub>+</sub>(k) - E<sub>-</sub>(k)]
+    = 2 min<sub>k</sub> &radic;(t<sub>1</sub><sup>2</sup> + t<sub>2</sub><sup>2</sup> + 2 t<sub>1</sub> t<sub>2</sub> cos(k))
+  </div>
+  <div class="equation">
+    cos(k) = -1 at k = &pi; &nbsp;&rArr;&nbsp;
+    E<sub>g</sub> = 2 |t<sub>1</sub> - t<sub>2</sub>|
+  </div>
   <div class="equation">E<sub>g</sub> = 2 |t<sub>1</sub> - t<sub>2</sub>| = 4 |t &delta;| = {gap:.6f}</div>
   <p>The gap appears at the Brillouin-zone boundary <strong>k = &pi;</strong>.</p>
 
-  <h2>4. DOS Broadening</h2>
+  <h2>4. Brillouin-Zone Integrals and Numerical Approximation</h2>
   <div class="equation">
-    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+    D(E) = (1 / 2&pi;) &sum;<sub>n=&plusmn;</sub> &int;<sub>-&pi;</sub><sup>&pi;</sup> &delta;(E - E<sub>n</sub>(k)) dk
+  </div>
+  <div class="equation">
+    k<sub>m</sub> = -&pi; + 2&pi; m / (N<sub>k</sub> - 1), &nbsp; m = 0, ..., N<sub>k</sub> - 1
+  </div>
+  <div class="equation">
+    &delta;(x) &approx; L<sub>&eta;</sub>(x) = [&eta; / &pi;] / (x<sup>2</sup> + &eta;<sup>2</sup>)
+  </div>
+  <div class="equation">
+    D(E) &approx; (1 / N<sub>k</sub>) &sum;<sub>m</sub> &sum;<sub>n</sub> L<sub>&eta;</sub>(E - E<sub>n</sub>(k<sub>m</sub>))
+  </div>
+
+  <h2>5. Band-Plot Sampling</h2>
+  <div class="equation">
+    k<sub>m</sub> = -&pi; + 2&pi; m / (N<sub>band</sub> - 1)
+  </div>
+  <div class="equation">
+    The reciprocal-space band plot is obtained by evaluating E(k<sub>m</sub>) or E<sub>&plusmn;</sub>(k<sub>m</sub>) on this linearly spaced grid.
   </div>
   <div class="note">
     <strong>Parameters used in this run</strong><br/>
@@ -522,7 +552,7 @@ def write_report_html(path: Path, interactive_available: bool) -> None:
   <h2 style="margin-top: 28px;">Calculation Formulas</h2>
   <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
   <iframe src="calculation_formulas.html" title="Calculation formulas"
-          style="width: 100%; height: 760px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
+          style="width: 100%; height: 1200px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos_overlay.svg" alt="DOS overlay" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>

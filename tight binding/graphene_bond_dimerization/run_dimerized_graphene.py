@@ -492,7 +492,7 @@ def write_dimerized_formula_html(
 </head>
 <body>
   <h1>Graphene Bond-Dimerization Calculation Formulas</h1>
-  <p>This file summarizes the equations used for the graphene model where one nearest-neighbor bond is strengthened to create a bond dimerization pattern.</p>
+  <p>This file writes out the actual mathematical workflow for the bond-dimerized graphene calculation: Bloch Hamiltonian, gap criterion, Brillouin-zone integrals, and the discrete approximations used to generate the plots.</p>
 
   <h2>1. Dimerized Hamiltonian</h2>
   <div class="equation">
@@ -507,16 +507,39 @@ def write_dimerized_formula_html(
   <div class="equation">E<sub>&plusmn;</sub>(k) = &plusmn; |g(k)|</div>
 
   <h2>2. Gap Condition</h2>
+  <div class="equation">
+    E<sub>g</sub> = min<sub>k</sub> [E<sub>+</sub>(k) - E<sub>-</sub>(k)] = 2 min<sub>k</sub> |g(k)|
+  </div>
   <div class="equation">E<sub>g</sub> = 2 max(0, &delta;t - t)</div>
   <p>This minimal model shifts and distorts the Dirac cones. A true gap opens only when the strengthened bond exceeds the sum-rule threshold for cone annihilation, which here reduces to <strong>&delta;t &gt; t</strong>.</p>
 
-  <h2>3. Reciprocal Lattice</h2>
+  <h2>3. High-Symmetry Path and Reciprocal Grid</h2>
   <div class="equation">b<sub>1</sub> = ({b1[0]:.6f}, {b1[1]:.6f})</div>
   <div class="equation">b<sub>2</sub> = ({b2[0]:.6f}, {b2[1]:.6f})</div>
-
-  <h2>4. DOS Broadening</h2>
   <div class="equation">
-    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+    k(s) = (1 - s) k<sub>a</sub> + s k<sub>b</sub>, &nbsp; 0 &le; s &le; 1, &nbsp; path = G &rarr; K &rarr; M &rarr; G
+  </div>
+  <div class="equation">
+    k<sub>mn</sub> = u<sub>m</sub> b<sub>1</sub> + v<sub>n</sub> b<sub>2</sub>, &nbsp; (u<sub>m</sub>, v<sub>n</sub>) on a uniform grid clipped to the first Brillouin zone
+  </div>
+
+  <h2>4. Brillouin-Zone DOS Integral and Approximation</h2>
+  <div class="equation">
+    D(E) = (1 / A<sub>BZ</sub>) &sum;<sub>n=&plusmn;</sub> &int;<sub>BZ</sub> &delta;(E - E<sub>n</sub>(k)) d<sup>2</sup>k
+  </div>
+  <div class="equation">
+    &delta;(x) &approx; L<sub>&eta;</sub>(x) = [&eta; / &pi;] / (x<sup>2</sup> + &eta;<sup>2</sup>)
+  </div>
+  <div class="equation">
+    D(E) &approx; (1 / N<sub>k</sub>) &sum;<sub>m</sub> &sum;<sub>n=&plusmn;</sub> L<sub>&eta;</sub>(E - E<sub>n</sub>(k<sub>m</sub>))
+  </div>
+
+  <h2>5. Numerical Gap Extraction Used in the Code</h2>
+  <div class="equation">
+    E<sub>g</sub><sup>(num)</sup> &approx; min<sub>m</sub> [E<sub>upper</sub>(k<sub>m</sub>) - E<sub>lower</sub>(k<sub>m</sub>)]
+  </div>
+  <div class="equation">
+    E<sub>lower</sub>(k<sub>m</sub>) = E<sub>-</sub>(k<sub>m</sub>), &nbsp; E<sub>upper</sub>(k<sub>m</sub>) = E<sub>+</sub>(k<sub>m</sub>)
   </div>
 
   <div class="note">
@@ -631,7 +654,7 @@ def write_dimerized_report_html(
   <h2 style="margin-top: 28px;">Calculation Formulas</h2>
   <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
   <iframe src="calculation_formulas.html" title="Graphene bond-dimerization formulas"
-          style="width: 100%; height: 900px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
+          style="width: 100%; height: 1320px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos.svg" alt="Dimerized graphene DOS" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>

@@ -97,7 +97,8 @@ Each run can create:
 - `report.html`
 
 Project-specific reports now include a dedicated formula panel so the Hamiltonian, dispersion, gap expression,
-and DOS broadening equation can be reviewed as math, not just inferred from the code.
+Brillouin-zone integral, numerical sampling approximation, and DOS broadening equation can be reviewed as math,
+not just inferred from the code.
 
 ## Notes
 

@@ -533,7 +533,7 @@ def write_formula_html(
 </head>
 <body>
   <h1>Distorted AB-Pair Graphene Calculation Formulas</h1>
-  <p>This project uses a real-space distorted six-site supercell. The band structure is obtained by constructing a 6x6 Bloch Hamiltonian from the distorted coordinates themselves, not from an ideal graphene bond pattern.</p>
+  <p>This project uses a real-space distorted six-site supercell. The formulas below show the full calculation route: distorted hopping law, 6x6 Bloch Hamiltonian, Brillouin-zone integration, and the numerical approximations used to build the plots.</p>
 
   <h2>1. Distorted Hopping Law</h2>
   <div class="equation">t(d) = t<sub>0</sub> exp[-&beta; (d / a<sub>0</sub> - 1)]</div>
@@ -553,9 +553,36 @@ def write_formula_html(
     {bond_rows}
   </ul>
 
-  <h2>5. DOS Broadening</h2>
+  <h2>5. Band-Path Sampling</h2>
   <div class="equation">
-    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+    k(s) = (1 - s) k<sub>a</sub> + s k<sub>b</sub>, &nbsp; 0 &le; s &le; 1, &nbsp; path = G &rarr; K &rarr; M &rarr; G
+  </div>
+  <div class="equation">
+    For each sampled k-value, the code diagonalizes the 6x6 matrix H(k) and sorts the six eigenvalues.
+  </div>
+
+  <h2>6. Brillouin-Zone DOS Integral and Approximation</h2>
+  <div class="equation">
+    D(E) = (1 / A<sub>BZ</sub>) &sum;<sub>n=1</sub><sup>6</sup> &int;<sub>BZ</sub> &delta;(E - E<sub>n</sub>(k)) d<sup>2</sup>k
+  </div>
+  <div class="equation">
+    &delta;(x) &approx; L<sub>&eta;</sub>(x) = [&eta; / &pi;] / (x<sup>2</sup> + &eta;<sup>2</sup>)
+  </div>
+  <div class="equation">
+    D(E) &approx; (1 / N<sub>k</sub>) &sum;<sub>m</sub> &sum;<sub>n=1</sub><sup>6</sup> L<sub>&eta;</sub>(E - E<sub>n</sub>(k<sub>m</sub>))
+  </div>
+
+  <h2>7. Reciprocal-Space Map and Numerical Gap</h2>
+  <div class="equation">
+    k<sub>mn</sub> = u<sub>m</sub> B<sub>1</sub> + v<sub>n</sub> B<sub>2</sub>, &nbsp; (u<sub>m</sub>, v<sub>n</sub>) on a uniform grid clipped to the first Brillouin zone
+  </div>
+  <div class="equation">
+    E<sub>g</sub><sup>(num)</sup> &approx; min<sub>m</sub> [E<sub>4</sub>(k<sub>m</sub>) - E<sub>3</sub>(k<sub>m</sub>)]
+  </div>
+
+  <h2>8. DOS Broadening</h2>
+  <div class="equation">
+    The same Lorentzian broadening is used for all six bands when generating DOS curves from the sampled reciprocal-space eigenvalues.
   </div>
 
   <div class="note">
@@ -627,7 +654,7 @@ def write_report_html(
   <h2 style="margin-top: 28px;">Calculation Formulas</h2>
   <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
   <iframe src="calculation_formulas.html" title="Distorted AB-pair graphene formulas"
-          style="width: 100%; height: 920px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
+          style="width: 100%; height: 1380px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos.svg" alt="Distorted graphene DOS" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>

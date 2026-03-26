@@ -419,7 +419,7 @@ def write_formula_html(path: Path, t: float, deltas: np.ndarray, b1: np.ndarray,
 </head>
 <body>
   <h1>Single-Layer Graphene Calculation Formulas</h1>
-  <p>This file collects the analytical equations used for the real-space, band, reciprocal-space, and DOS plots.</p>
+  <p>This file writes out the actual calculation flow used for the graphene plots: Bloch Hamiltonian, eigenvalues, k-path interpolation, Brillouin-zone integrals, and the discrete approximations used in the numerics.</p>
 
   <h2>1. Nearest-Neighbor Hamiltonian</h2>
   <div class="equation">
@@ -443,9 +443,42 @@ def write_formula_html(path: Path, t: float, deltas: np.ndarray, b1: np.ndarray,
   <div class="equation">b<sub>2</sub> = ({b2[0]:.6f}, {b2[1]:.6f})</div>
   <div class="equation">K = (b<sub>1</sub> - b<sub>2</sub>) / 3,&nbsp;&nbsp; M = b<sub>1</sub> / 2</div>
 
-  <h2>4. DOS Broadening</h2>
+  <h2>4. High-Symmetry Band Path</h2>
   <div class="equation">
-    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+    k(s) = (1 - s) k<sub>a</sub> + s k<sub>b</sub>, &nbsp; 0 &le; s &le; 1
+  </div>
+  <div class="equation">
+    s<sub>m</sub> = m / (N<sub>seg</sub> - 1), &nbsp; m = 0, ..., N<sub>seg</sub> - 1
+  </div>
+  <div class="equation">
+    The plotted path is G &rarr; K &rarr; M &rarr; G, with E<sub>&plusmn;</sub>(k(s<sub>m</sub>)) evaluated on each segment.
+  </div>
+
+  <h2>5. Brillouin-Zone Integral for DOS</h2>
+  <div class="equation">
+    D(E) = (1 / A<sub>BZ</sub>) &sum;<sub>n=&plusmn;</sub> &int;<sub>BZ</sub> &delta;(E - E<sub>n</sub>(k)) d<sup>2</sup>k
+  </div>
+  <div class="equation">
+    &delta;(x) &approx; L<sub>&eta;</sub>(x) = [&eta; / &pi;] / (x<sup>2</sup> + &eta;<sup>2</sup>)
+  </div>
+  <div class="equation">
+    D(E) &approx; (1 / N<sub>k</sub>) &sum;<sub>m</sub> &sum;<sub>n=&plusmn;</sub> L<sub>&eta;</sub>(E - E<sub>n</sub>(k<sub>m</sub>))
+  </div>
+
+  <h2>6. Reciprocal-Space Surface Sampling</h2>
+  <div class="equation">
+    k<sub>mn</sub> = u<sub>m</sub> b<sub>1</sub> + v<sub>n</sub> b<sub>2</sub>, &nbsp; (u<sub>m</sub>, v<sub>n</sub>) on a uniform grid clipped to the first Brillouin zone
+  </div>
+  <div class="equation">
+    E<sub>lower</sub>(k<sub>mn</sub>) = E<sub>-</sub>(k<sub>mn</sub>), &nbsp; E<sub>upper</sub>(k<sub>mn</sub>) = E<sub>+</sub>(k<sub>mn</sub>)
+  </div>
+
+  <h2>7. Low-Energy Dirac Approximation</h2>
+  <div class="equation">
+    f(K + q) &approx; - (3 a / 2) (q<sub>x</sub> - i q<sub>y</sub>)
+  </div>
+  <div class="equation">
+    E<sub>&plusmn;</sub>(K + q) &approx; &plusmn; v<sub>F</sub> |q|
   </div>
 
   <div class="note">
@@ -509,7 +542,7 @@ def write_report_html(path: Path, real_space_interactive: bool, reciprocal_inter
   <h2 style="margin-top: 28px;">Calculation Formulas</h2>
   <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
   <iframe src="calculation_formulas.html" title="Graphene calculation formulas"
-          style="width: 100%; height: 820px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
+          style="width: 100%; height: 1350px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos.svg" alt="Graphene DOS" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>
