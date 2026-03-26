@@ -78,6 +78,47 @@ function Resolve-TailscaleExe {
     return $null
 }
 
+function Test-TcpPort {
+    param(
+        [string]$Host = "127.0.0.1",
+        [int]$Port,
+        [int]$TimeoutMs = 1000
+    )
+
+    $Client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $AsyncResult = $Client.BeginConnect($Host, $Port, $null, $null)
+        if (-not $AsyncResult.AsyncWaitHandle.WaitOne($TimeoutMs, $false)) {
+            return $false
+        }
+        $Client.EndConnect($AsyncResult)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $Client.Close()
+    }
+}
+
+function Wait-TcpPort {
+    param(
+        [string]$Host = "127.0.0.1",
+        [int]$Port,
+        [int]$Attempts = 15,
+        [int]$TimeoutMs = 1000,
+        [int]$DelayMs = 400
+    )
+
+    for ($Index = 0; $Index -lt $Attempts; $Index++) {
+        if (Test-TcpPort -Host $Host -Port $Port -TimeoutMs $TimeoutMs) {
+            return $true
+        }
+        Start-Sleep -Milliseconds $DelayMs
+    }
+
+    return $false
+}
+
 function Start-LocalServer {
     Stop-ExistingProcess -PidFile $ServerPidFile
 
@@ -98,10 +139,9 @@ function Start-LocalServer {
         -RedirectStandardError $ServerStderr
 
     $ServerProc.Id | Set-Content -LiteralPath $ServerPidFile -Encoding ascii
-    Start-Sleep -Seconds 2
 
-    $PortReady = Test-NetConnection 127.0.0.1 -Port $Port -WarningAction SilentlyContinue
-    if (-not $PortReady.TcpTestSucceeded) {
+    $PortReady = Wait-TcpPort -Host "127.0.0.1" -Port $Port -Attempts 15 -TimeoutMs 1000 -DelayMs 400
+    if (-not $PortReady) {
         Stop-Process -Id $ServerProc.Id -Force -ErrorAction SilentlyContinue
         throw "The local HTTP server did not start on port $Port."
     }
