@@ -15,6 +15,7 @@ Running the script produces:
 - `outputs/dos.svg`
 - `outputs/reciprocal_space_map.csv`
 - `outputs/reciprocal_space_map.svg`
+- `outputs/reciprocal_space_interactive.html`
 - `outputs/report.html`
 
 ## Run
@@ -63,3 +64,4 @@ The script generates:
 - `G-K-M-G` band structure
 - DOS
 - 2D reciprocal-space band map inside the first Brillouin zone
+- interactive 3D reciprocal-space band surfaces that can be rotated in the browser

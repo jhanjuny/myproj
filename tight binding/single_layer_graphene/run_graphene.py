@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tb.export import ensure_dir, write_band_csv, write_band_svg, write_dos_csv, write_dos_svg
-from tb.interactive_3d import export_atomic_scene_html, pyvista_is_available
+from tb.interactive_3d import export_atomic_scene_html, export_reciprocal_surfaces_html, pyvista_is_available
 from tb.kpath import sample_k_path
 
 
@@ -383,17 +383,26 @@ This nearest-neighbor model produces Dirac cones at K/K' and zero DOS at E = 0.
     path.write_text(text, encoding="utf-8")
 
 
-def write_status_note(path: Path, message: str) -> None:
-    path.write_text(message.rstrip() + "\n", encoding="utf-8")
+def write_status_note(path: Path, lines: list[str]) -> None:
+    path.write_text("\n".join(line.rstrip() for line in lines).rstrip() + "\n", encoding="utf-8")
 
 
-def write_report_html(path: Path, interactive_available: bool) -> None:
-    interactive_block = (
+def write_report_html(path: Path, real_space_interactive: bool, reciprocal_interactive: bool) -> None:
+    real_space_block = (
         '<iframe src="real_space_interactive.html" title="Interactive graphene view" '
         'style="width: 100%; height: 600px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>'
-        if interactive_available
+        if real_space_interactive
         else '<div style="padding: 24px; border: 1px solid #d0d0d0; border-radius: 10px; background: #fafafa;">'
              '<strong>Interactive 3D view was not generated.</strong><br/>'
+             'See <code>interactive_status.txt</code> for the dependency/runtime reason.'
+             '</div>'
+    )
+    reciprocal_block = (
+        '<iframe src="reciprocal_space_interactive.html" title="Interactive reciprocal-space graphene view" '
+        'style="width: 100%; height: 760px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>'
+        if reciprocal_interactive
+        else '<div style="padding: 24px; border: 1px solid #d0d0d0; border-radius: 10px; background: #fafafa;">'
+             '<strong>Interactive reciprocal-space view was not generated.</strong><br/>'
              'See <code>interactive_status.txt</code> for the dependency/runtime reason.'
              '</div>'
     )
@@ -409,13 +418,15 @@ def write_report_html(path: Path, interactive_available: bool) -> None:
   <h1 style="margin-bottom: 8px;">Single-Layer Graphene Report</h1>
   <p style="margin-top: 0;">Nearest-neighbor tight-binding outputs: real space, reciprocal-space map, band structure, and DOS.</p>
   <h2>Interactive Real Space</h2>
-  {interactive_block}
+  {real_space_block}
   <h2 style="margin-top: 28px;">Static Real Space</h2>
   <img src="real_space.svg" alt="Graphene real-space patch" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
   <h2 style="margin-top: 28px;">Band Structure (G-K-M-G)</h2>
   <img src="band_structure.svg" alt="Graphene band structure" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
   <h2 style="margin-top: 28px;">2D Reciprocal Space</h2>
   <img src="reciprocal_space_map.svg" alt="Graphene reciprocal-space band map" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
+  <h2 style="margin-top: 28px;">Interactive 3D Reciprocal Space</h2>
+  {reciprocal_block}
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos.svg" alt="Graphene DOS" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>
@@ -491,6 +502,7 @@ def main() -> None:
     dos_svg = out_dir / "dos.svg"
     reciprocal_csv = out_dir / "reciprocal_space_map.csv"
     reciprocal_svg = out_dir / "reciprocal_space_map.svg"
+    reciprocal_html = out_dir / "reciprocal_space_interactive.html"
     report_html = out_dir / "report.html"
     interactive_status = out_dir / "interactive_status.txt"
 
@@ -504,6 +516,10 @@ def main() -> None:
     write_reciprocal_svg(reciprocal_svg, polygon, reciprocal_rows, k_path, args.t)
 
     interactive_ok, interactive_reason = pyvista_is_available(out_dir)
+    real_space_interactive_ok = False
+    reciprocal_interactive_ok = False
+    status_lines: list[str] = []
+
     if interactive_ok:
         try:
             export_atomic_scene_html(
@@ -516,14 +532,41 @@ def main() -> None:
                 point_labels=labels,
                 label_positions=label_positions,
             )
-            write_status_note(interactive_status, "Interactive PyVista HTML generated successfully.")
+            real_space_interactive_ok = True
+            status_lines.append("Real-space interactive HTML generated successfully.")
         except Exception as exc:
-            interactive_ok = False
-            write_status_note(interactive_status, f"Interactive HTML export failed: {type(exc).__name__}: {exc}")
-    else:
-        write_status_note(interactive_status, f"PyVista unavailable: {interactive_reason}")
+            status_lines.append(f"Real-space interactive HTML export failed: {type(exc).__name__}: {exc}")
 
-    write_report_html(report_html, interactive_available=interactive_ok)
+        try:
+            reciprocal_points = np.array([[row[0], row[1]] for row in reciprocal_rows], dtype=float)
+            lower_energies = np.array([row[2] for row in reciprocal_rows], dtype=float)
+            upper_energies = np.array([row[3] for row in reciprocal_rows], dtype=float)
+            path_points = np.vstack([point for _, point in k_path])
+            path_labels = [label for label, _ in k_path]
+            export_reciprocal_surfaces_html(
+                output_path=reciprocal_html,
+                title="single-layer graphene reciprocal-space surfaces",
+                xy_points=reciprocal_points,
+                lower_energies=lower_energies,
+                upper_energies=upper_energies,
+                polygon_vertices=polygon,
+                k_path=path_points,
+                k_labels=path_labels,
+                energy_limit=energy_limit,
+            )
+            reciprocal_interactive_ok = True
+            status_lines.append("Reciprocal-space interactive HTML generated successfully.")
+        except Exception as exc:
+            status_lines.append(f"Reciprocal-space interactive HTML export failed: {type(exc).__name__}: {exc}")
+    else:
+        status_lines.append(f"PyVista unavailable: {interactive_reason}")
+
+    write_status_note(interactive_status, status_lines)
+    write_report_html(
+        report_html,
+        real_space_interactive=real_space_interactive_ok,
+        reciprocal_interactive=reciprocal_interactive_ok,
+    )
 
     print(f"Output directory: {out_dir}")
     print(f"[structure] {real_space_svg}")
@@ -535,6 +578,7 @@ def main() -> None:
     print(f"[dos svg]   {dos_svg}")
     print(f"[k-map csv] {reciprocal_csv}")
     print(f"[k-map svg] {reciprocal_svg}")
+    print(f"[k-map 3d]  {reciprocal_html}")
     print(f"[report]    {report_html}")
     print(f"[3d status] {interactive_status}")
     print(f"Band range: {bands.min():.4f} .. {bands.max():.4f}")
