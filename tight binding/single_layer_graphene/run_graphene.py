@@ -383,6 +383,85 @@ This nearest-neighbor model produces Dirac cones at K/K' and zero DOS at E = 0.
     path.write_text(text, encoding="utf-8")
 
 
+def write_formula_html(path: Path, t: float, deltas: np.ndarray, b1: np.ndarray, b2: np.ndarray) -> None:
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Single-Layer Graphene Calculation Formulas</title>
+  <style>
+    body {{
+      margin: 24px;
+      font-family: "Segoe UI", Arial, sans-serif;
+      line-height: 1.65;
+      color: #111;
+      background: #fff;
+    }}
+    h1, h2 {{
+      font-family: Consolas, monospace;
+    }}
+    .equation {{
+      margin: 14px 0;
+      padding: 14px 18px;
+      border-left: 4px solid #1f6feb;
+      background: #f6f8fa;
+      font-family: "Times New Roman", serif;
+      font-size: 1.12rem;
+    }}
+    .note {{
+      padding: 14px 18px;
+      border: 1px solid #d0d7de;
+      border-radius: 10px;
+      background: #fbfbfc;
+    }}
+  </style>
+</head>
+<body>
+  <h1>Single-Layer Graphene Calculation Formulas</h1>
+  <p>This file collects the analytical equations used for the real-space, band, reciprocal-space, and DOS plots.</p>
+
+  <h2>1. Nearest-Neighbor Hamiltonian</h2>
+  <div class="equation">
+    H(k) =
+    <span style="display: inline-block; vertical-align: middle;">
+      [ [ 0,&nbsp; -t f(k) ],
+      <br/>
+      &nbsp;&nbsp;[ -t f*(k),&nbsp; 0 ] ]
+    </span>
+  </div>
+  <div class="equation">f(k) = &sum;<sub>j=1</sub><sup>3</sup> exp[i k &middot; &delta;<sub>j</sub>]</div>
+  <div class="equation">E<sub>&plusmn;</sub>(k) = &plusmn; t |f(k)|</div>
+
+  <h2>2. Bond Vectors</h2>
+  <div class="equation">&delta;<sub>1</sub> = ({deltas[0, 0]:.6f}, {deltas[0, 1]:.6f})</div>
+  <div class="equation">&delta;<sub>2</sub> = ({deltas[1, 0]:.6f}, {deltas[1, 1]:.6f})</div>
+  <div class="equation">&delta;<sub>3</sub> = ({deltas[2, 0]:.6f}, {deltas[2, 1]:.6f})</div>
+
+  <h2>3. Reciprocal Lattice</h2>
+  <div class="equation">b<sub>1</sub> = ({b1[0]:.6f}, {b1[1]:.6f})</div>
+  <div class="equation">b<sub>2</sub> = ({b2[0]:.6f}, {b2[1]:.6f})</div>
+  <div class="equation">K = (b<sub>1</sub> - b<sub>2</sub>) / 3,&nbsp;&nbsp; M = b<sub>1</sub> / 2</div>
+
+  <h2>4. DOS Broadening</h2>
+  <div class="equation">
+    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+  </div>
+
+  <div class="note">
+    <strong>Physical consequence</strong><br/>
+    This model produces Dirac cones at K and K', so the Dirac-point gap is zero and the DOS vanishes linearly near E = 0.
+  </div>
+  <div class="note" style="margin-top: 14px;">
+    <strong>Run parameter</strong><br/>
+    t = {t:.6f}
+  </div>
+</body>
+</html>
+"""
+    path.write_text(html, encoding="utf-8")
+
+
 def write_status_note(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(line.rstrip() for line in lines).rstrip() + "\n", encoding="utf-8")
 
@@ -427,6 +506,10 @@ def write_report_html(path: Path, real_space_interactive: bool, reciprocal_inter
   <img src="reciprocal_space_map.svg" alt="Graphene reciprocal-space band map" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
   <h2 style="margin-top: 28px;">Interactive 3D Reciprocal Space</h2>
   {reciprocal_block}
+  <h2 style="margin-top: 28px;">Calculation Formulas</h2>
+  <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
+  <iframe src="calculation_formulas.html" title="Graphene calculation formulas"
+          style="width: 100%; height: 820px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos.svg" alt="Graphene DOS" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>
@@ -496,6 +579,7 @@ def main() -> None:
     real_space_svg = out_dir / "real_space.svg"
     real_space_html = out_dir / "real_space_interactive.html"
     summary_txt = out_dir / "model_summary.txt"
+    formula_html = out_dir / "calculation_formulas.html"
     band_csv = out_dir / "band_structure.csv"
     band_svg = out_dir / "band_structure.svg"
     dos_csv = out_dir / "dos.csv"
@@ -508,6 +592,7 @@ def main() -> None:
 
     write_real_space_svg(real_space_svg, positions, colors, bonds)
     write_model_summary(summary_txt, args.t, deltas, b1, b2)
+    write_formula_html(formula_html, args.t, deltas, b1, b2)
     write_band_csv(band_csv, distances, bands)
     write_band_svg(band_svg, "Single-layer graphene band structure", distances, bands, tick_positions, tick_labels)
     write_dos_csv(dos_csv, energy_axis, dos)
@@ -572,6 +657,7 @@ def main() -> None:
     print(f"[structure] {real_space_svg}")
     print(f"[3d html]   {real_space_html}")
     print(f"[summary]   {summary_txt}")
+    print(f"[formula]   {formula_html}")
     print(f"[band csv]  {band_csv}")
     print(f"[band svg]  {band_svg}")
     print(f"[dos csv]   {dos_csv}")

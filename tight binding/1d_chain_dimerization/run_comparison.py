@@ -407,6 +407,87 @@ Band gap at k = pi: 2 |t1 - t2| = {gap:.6f}
     path.write_text(text, encoding="utf-8")
 
 
+def write_formula_html(path: Path, t: float, delta: float, t1: float, t2: float) -> None:
+    gap = 2.0 * abs(t1 - t2)
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>1D Chain Calculation Formulas</title>
+  <style>
+    body {{
+      margin: 24px;
+      font-family: "Segoe UI", Arial, sans-serif;
+      line-height: 1.65;
+      color: #111;
+      background: #fff;
+    }}
+    h1, h2 {{
+      font-family: Consolas, monospace;
+    }}
+    .equation {{
+      margin: 14px 0;
+      padding: 14px 18px;
+      border-left: 4px solid #1f6feb;
+      background: #f6f8fa;
+      font-family: "Times New Roman", serif;
+      font-size: 1.12rem;
+    }}
+    .note {{
+      padding: 14px 18px;
+      border: 1px solid #d0d7de;
+      border-radius: 10px;
+      background: #fbfbfc;
+    }}
+  </style>
+</head>
+<body>
+  <h1>1D Chain Calculation Formulas</h1>
+  <p>This file summarizes the tight-binding equations used to generate the band and DOS plots for the uniform chain and the dimerized chain.</p>
+
+  <h2>1. Uniform Chain</h2>
+  <div class="equation">H(k) = -2 t cos(k)</div>
+  <div class="equation">E(k) = -2 t cos(k)</div>
+  <p>For this run, <strong>t = {t:.6f}</strong>.</p>
+
+  <h2>2. Dimerized Chain</h2>
+  <p>The dimerized chain uses two alternating nearest-neighbor hoppings:</p>
+  <div class="equation">t<sub>1</sub> = t (1 - &delta;) = {t1:.6f}</div>
+  <div class="equation">t<sub>2</sub> = t (1 + &delta;) = {t2:.6f}</div>
+  <div class="equation">
+    H(k) =
+    <span style="display: inline-block; vertical-align: middle;">
+      [ [ 0,&nbsp; t<sub>1</sub> + t<sub>2</sub> e<sup>-ik</sup> ],
+      <br/>
+      &nbsp;&nbsp;[ t<sub>1</sub> + t<sub>2</sub> e<sup>+ik</sup>,&nbsp; 0 ] ]
+    </span>
+  </div>
+  <div class="equation">
+    E<sub>&plusmn;</sub>(k) = &plusmn; &radic;(t<sub>1</sub><sup>2</sup> + t<sub>2</sub><sup>2</sup> + 2 t<sub>1</sub> t<sub>2</sub> cos(k))
+  </div>
+
+  <h2>3. Band Gap</h2>
+  <div class="equation">E<sub>g</sub> = 2 |t<sub>1</sub> - t<sub>2</sub>| = 4 |t &delta;| = {gap:.6f}</div>
+  <p>The gap appears at the Brillouin-zone boundary <strong>k = &pi;</strong>.</p>
+
+  <h2>4. DOS Broadening</h2>
+  <div class="equation">
+    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+  </div>
+  <div class="note">
+    <strong>Parameters used in this run</strong><br/>
+    &delta; = {delta:.6f}<br/>
+    t = {t:.6f}<br/>
+    t<sub>1</sub> = {t1:.6f}<br/>
+    t<sub>2</sub> = {t2:.6f}
+  </div>
+</body>
+</html>
+"""
+    path.write_text(html, encoding="utf-8")
+
+
 def write_status_note(path: Path, message: str) -> None:
     path.write_text(message.rstrip() + "\n", encoding="utf-8")
 
@@ -438,6 +519,10 @@ def write_report_html(path: Path, interactive_available: bool) -> None:
   <img src="real_space.svg" alt="Real-space SVG" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
   <h2 style="margin-top: 28px;">Reciprocal Space</h2>
   <img src="reciprocal_space.svg" alt="Reciprocal-space band plot" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
+  <h2 style="margin-top: 28px;">Calculation Formulas</h2>
+  <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
+  <iframe src="calculation_formulas.html" title="Calculation formulas"
+          style="width: 100%; height: 760px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos_overlay.svg" alt="DOS overlay" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>
@@ -477,6 +562,7 @@ def main() -> None:
     real_space_svg = out_dir / "real_space.svg"
     real_space_html = out_dir / "real_space_interactive.html"
     summary_txt = out_dir / "model_summary.txt"
+    formula_html = out_dir / "calculation_formulas.html"
     dos_csv = out_dir / "dos_overlay.csv"
     dos_svg = out_dir / "dos_overlay.svg"
     band_csv = out_dir / "band_overlay.csv"
@@ -486,6 +572,7 @@ def main() -> None:
 
     write_real_space_svg(real_space_svg, args.cells, args.delta)
     write_model_summary(summary_txt, args.t, args.delta, t1, t2)
+    write_formula_html(formula_html, args.t, args.delta, t1, t2)
     write_dos_overlay_csv(dos_csv, energy_axis, chain_dos, dimer_dos)
     write_dos_overlay_svg(dos_svg, energy_axis, chain_dos, dimer_dos)
     write_band_overlay_csv(band_csv, k_points, chain_bands, dimer_bands)
@@ -521,6 +608,7 @@ def main() -> None:
     print(f"[structure] {real_space_svg}")
     print(f"[3d html]   {real_space_html}")
     print(f"[summary]   {summary_txt}")
+    print(f"[formula]   {formula_html}")
     print(f"[band csv]  {band_csv}")
     print(f"[band svg]  {reciprocal_svg}")
     print(f"[dos csv]   {dos_csv}")

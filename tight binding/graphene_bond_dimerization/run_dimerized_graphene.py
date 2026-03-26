@@ -447,6 +447,95 @@ Analytical gap formula value = {analytical_gap_value:.6f}
     path.write_text(text, encoding="utf-8")
 
 
+def write_dimerized_formula_html(
+    path: Path,
+    t: float,
+    delta_t: float,
+    b1: np.ndarray,
+    b2: np.ndarray,
+    analytical_gap_value: float,
+    numerical_gap_value: float,
+) -> None:
+    strong_bond = t + delta_t
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Graphene Bond-Dimerization Calculation Formulas</title>
+  <style>
+    body {{
+      margin: 24px;
+      font-family: "Segoe UI", Arial, sans-serif;
+      line-height: 1.65;
+      color: #111;
+      background: #fff;
+    }}
+    h1, h2 {{
+      font-family: Consolas, monospace;
+    }}
+    .equation {{
+      margin: 14px 0;
+      padding: 14px 18px;
+      border-left: 4px solid #1f6feb;
+      background: #f6f8fa;
+      font-family: "Times New Roman", serif;
+      font-size: 1.12rem;
+    }}
+    .note {{
+      padding: 14px 18px;
+      border: 1px solid #d0d7de;
+      border-radius: 10px;
+      background: #fbfbfc;
+    }}
+  </style>
+</head>
+<body>
+  <h1>Graphene Bond-Dimerization Calculation Formulas</h1>
+  <p>This file summarizes the equations used for the graphene model where one nearest-neighbor bond is strengthened to create a bond dimerization pattern.</p>
+
+  <h2>1. Dimerized Hamiltonian</h2>
+  <div class="equation">
+    H(k) =
+    <span style="display: inline-block; vertical-align: middle;">
+      [ [ 0,&nbsp; -g(k) ],
+      <br/>
+      &nbsp;&nbsp;[ -g*(k),&nbsp; 0 ] ]
+    </span>
+  </div>
+  <div class="equation">g(k) = (t + &delta;t) e<sup>i k&middot;d<sub>1</sub></sup> + t e<sup>i k&middot;d<sub>2</sub></sup> + t e<sup>i k&middot;d<sub>3</sub></sup></div>
+  <div class="equation">E<sub>&plusmn;</sub>(k) = &plusmn; |g(k)|</div>
+
+  <h2>2. Gap Condition</h2>
+  <div class="equation">E<sub>g</sub> = 2 max(0, &delta;t - t)</div>
+  <p>This minimal model shifts and distorts the Dirac cones. A true gap opens only when the strengthened bond exceeds the sum-rule threshold for cone annihilation, which here reduces to <strong>&delta;t &gt; t</strong>.</p>
+
+  <h2>3. Reciprocal Lattice</h2>
+  <div class="equation">b<sub>1</sub> = ({b1[0]:.6f}, {b1[1]:.6f})</div>
+  <div class="equation">b<sub>2</sub> = ({b2[0]:.6f}, {b2[1]:.6f})</div>
+
+  <h2>4. DOS Broadening</h2>
+  <div class="equation">
+    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+  </div>
+
+  <div class="note">
+    <strong>Run parameters</strong><br/>
+    t = {t:.6f}<br/>
+    &delta;t = {delta_t:.6f}<br/>
+    strengthened bond = t + &delta;t = {strong_bond:.6f}
+  </div>
+  <div class="note" style="margin-top: 14px;">
+    <strong>Gap values in this run</strong><br/>
+    Analytical gap = {analytical_gap_value:.6f}<br/>
+    Numerical minimum gap from reciprocal-space sampling = {numerical_gap_value:.6f}
+  </div>
+</body>
+</html>
+"""
+    path.write_text(html, encoding="utf-8")
+
+
 def write_comparison_html(path: Path, delta_t: float, analytical_gap_value: float) -> None:
     gap_line = f"Analytical gap for this bond-dimerization model: Eg = 2 * max(0, delta_t - t) = {analytical_gap_value:.6f}."
     html = f"""<!DOCTYPE html>
@@ -539,6 +628,10 @@ def write_dimerized_report_html(
   {reciprocal_block}
   <h2 style="margin-top: 28px;">Pristine vs Dimerized Reciprocal Comparison</h2>
   {comparison_block}
+  <h2 style="margin-top: 28px;">Calculation Formulas</h2>
+  <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
+  <iframe src="calculation_formulas.html" title="Graphene bond-dimerization formulas"
+          style="width: 100%; height: 900px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos.svg" alt="Dimerized graphene DOS" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>
@@ -693,6 +786,7 @@ def main() -> None:
     real_space_svg = out_dir / "real_space.svg"
     real_space_html = out_dir / "real_space_interactive.html"
     summary_txt = out_dir / "model_summary.txt"
+    formula_html = out_dir / "calculation_formulas.html"
     band_csv = out_dir / "band_structure.csv"
     band_svg = out_dir / "band_structure.svg"
     dos_csv = out_dir / "dos.csv"
@@ -723,6 +817,7 @@ def main() -> None:
     numerical_gap_value = numerical_gap(reciprocal_rows)
     analytical_gap_value = analytic_gap(args.t, args.delta_t)
     write_dimerized_model_summary(summary_txt, args.t, args.delta_t, b1, b2, numerical_gap_value, analytical_gap_value)
+    write_dimerized_formula_html(formula_html, args.t, args.delta_t, b1, b2, analytical_gap_value, numerical_gap_value)
 
     interactive_ok, interactive_reason = pyvista_is_available(out_dir)
     real_space_interactive_ok = False
@@ -814,6 +909,7 @@ def main() -> None:
     print(f"[structure]      {real_space_svg}")
     print(f"[real 3d]        {real_space_html}")
     print(f"[summary]        {summary_txt}")
+    print(f"[formula]        {formula_html}")
     print(f"[band csv]       {band_csv}")
     print(f"[band svg]       {band_svg}")
     print(f"[dos csv]        {dos_csv}")

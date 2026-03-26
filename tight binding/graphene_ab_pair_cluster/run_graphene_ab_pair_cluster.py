@@ -484,6 +484,96 @@ Direct gap from reciprocal-space grid = {gap_value:.6f}
     path.write_text(text, encoding="utf-8")
 
 
+def write_formula_html(
+    path: Path,
+    pair_shift: float,
+    t0: float,
+    beta: float,
+    super_a1: np.ndarray,
+    super_a2: np.ndarray,
+    neighbor_terms: list[tuple[int, int, int, int, float, float]],
+    gap_value: float,
+) -> None:
+    unique_bonds = unique_bond_summary(neighbor_terms)
+    bond_rows = "".join(
+        f"<li>d = {distance:.6f}, t(d) = {hopping:.6f}</li>" for distance, hopping in unique_bonds
+    )
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Distorted AB-Pair Graphene Calculation Formulas</title>
+  <style>
+    body {{
+      margin: 24px;
+      font-family: "Segoe UI", Arial, sans-serif;
+      line-height: 1.65;
+      color: #111;
+      background: #fff;
+    }}
+    h1, h2 {{
+      font-family: Consolas, monospace;
+    }}
+    .equation {{
+      margin: 14px 0;
+      padding: 14px 18px;
+      border-left: 4px solid #1f6feb;
+      background: #f6f8fa;
+      font-family: "Times New Roman", serif;
+      font-size: 1.12rem;
+    }}
+    .note {{
+      padding: 14px 18px;
+      border: 1px solid #d0d7de;
+      border-radius: 10px;
+      background: #fbfbfc;
+    }}
+  </style>
+</head>
+<body>
+  <h1>Distorted AB-Pair Graphene Calculation Formulas</h1>
+  <p>This project uses a real-space distorted six-site supercell. The band structure is obtained by constructing a 6x6 Bloch Hamiltonian from the distorted coordinates themselves, not from an ideal graphene bond pattern.</p>
+
+  <h2>1. Distorted Hopping Law</h2>
+  <div class="equation">t(d) = t<sub>0</sub> exp[-&beta; (d / a<sub>0</sub> - 1)]</div>
+  <p>The nearest-neighbor hopping is recalculated from each distorted bond length after the AB-pair coordinates are displaced.</p>
+
+  <h2>2. Six-Site Bloch Hamiltonian</h2>
+  <div class="equation">H<sub>ij</sub>(k) = &sum;<sub>R</sub> t<sub>ij</sub>(R) exp[i k &middot; (R + r<sub>j</sub> - r<sub>i</sub>)]</div>
+  <div class="equation">E<sub>n</sub>(k) = eigenvalues of H(k), &nbsp; n = 1, ..., 6</div>
+  <div class="equation">E<sub>g</sub> = min<sub>k</sub> [E<sub>4</sub>(k) - E<sub>3</sub>(k)]</div>
+
+  <h2>3. Supercell Geometry</h2>
+  <div class="equation">T<sub>1</sub> = ({super_a1[0]:.6f}, {super_a1[1]:.6f})</div>
+  <div class="equation">T<sub>2</sub> = ({super_a2[0]:.6f}, {super_a2[1]:.6f})</div>
+
+  <h2>4. Distorted Nearest-Neighbor Bonds</h2>
+  <ul>
+    {bond_rows}
+  </ul>
+
+  <h2>5. DOS Broadening</h2>
+  <div class="equation">
+    D(E) &asymp; (1 / N<sub>k</sub>) &sum;<sub>n,k</sub> [&eta; / &pi;] / [ (E - E<sub>n</sub>(k))<sup>2</sup> + &eta;<sup>2</sup> ]
+  </div>
+
+  <div class="note">
+    <strong>Run parameters</strong><br/>
+    pair_shift = {pair_shift:.6f}<br/>
+    t<sub>0</sub> = {t0:.6f}<br/>
+    &beta; = {beta:.6f}
+  </div>
+  <div class="note" style="margin-top: 14px;">
+    <strong>Gap result from this run</strong><br/>
+    Direct gap from reciprocal-space sampling = {gap_value:.6f}
+  </div>
+</body>
+</html>
+"""
+    path.write_text(html, encoding="utf-8")
+
+
 def write_status_note(path: Path, lines: list[str]) -> None:
     path.write_text("\n".join(line.rstrip() for line in lines).rstrip() + "\n", encoding="utf-8")
 
@@ -534,6 +624,10 @@ def write_report_html(
   <img src="reciprocal_space_map.svg" alt="Distorted graphene reciprocal-space map" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
   <h2 style="margin-top: 28px;">Interactive 3D Reciprocal Space</h2>
   {reciprocal_block}
+  <h2 style="margin-top: 28px;">Calculation Formulas</h2>
+  <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
+  <iframe src="calculation_formulas.html" title="Distorted AB-pair graphene formulas"
+          style="width: 100%; height: 920px; border: 1px solid #d0d0d0; border-radius: 10px;"></iframe>
   <h2 style="margin-top: 28px;">Density of States</h2>
   <img src="dos.svg" alt="Distorted graphene DOS" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
 </body>
@@ -612,6 +706,7 @@ def main() -> None:
     real_space_svg = out_dir / "real_space.svg"
     real_space_html = out_dir / "real_space_interactive.html"
     summary_txt = out_dir / "model_summary.txt"
+    formula_html = out_dir / "calculation_formulas.html"
     band_csv = out_dir / "band_structure.csv"
     band_svg = out_dir / "band_structure.svg"
     dos_csv = out_dir / "dos.csv"
@@ -624,6 +719,7 @@ def main() -> None:
 
     write_real_space_svg(real_space_svg, patch_positions, patch_colors, patch_bonds)
     write_model_summary(summary_txt, args.pair_shift, args.t0, args.beta, super_a1, super_a2, neighbor_terms, gap_value)
+    write_formula_html(formula_html, args.pair_shift, args.t0, args.beta, super_a1, super_a2, neighbor_terms, gap_value)
     write_band_csv(band_csv, distances, bands)
     write_band_svg(band_svg, "Distorted AB-pair graphene band structure", distances, bands, tick_positions, tick_labels)
     write_dos_csv(dos_csv, energy_axis, dos)
@@ -698,6 +794,7 @@ def main() -> None:
     print(f"[structure] {real_space_svg}")
     print(f"[3d html]   {real_space_html}")
     print(f"[summary]   {summary_txt}")
+    print(f"[formula]   {formula_html}")
     print(f"[band csv]  {band_csv}")
     print(f"[band svg]  {band_svg}")
     print(f"[dos csv]   {dos_csv}")

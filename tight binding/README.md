@@ -93,6 +93,11 @@ Each run can create:
 - `band_structure.svg`
 - `dos.csv`
 - `dos.svg`
+- `calculation_formulas.html`
+- `report.html`
+
+Project-specific reports now include a dedicated formula panel so the Hamiltonian, dispersion, gap expression,
+and DOS broadening equation can be reviewed as math, not just inferred from the code.
 
 ## Notes
 
