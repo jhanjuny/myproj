@@ -42,6 +42,23 @@ Then open:
 - `http://localhost:8010/graphene_bond_dimerization/outputs/report.html`
 - `http://localhost:8010/1d_chain_dimerization/outputs/report.html`
 
+## Public Link
+
+If you want a public HTTPS link that keeps working even after your local SSH/port-forwarding session closes,
+run the tunnel directly on the remote PC:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\start_public_tunnel.ps1" -Port 8010
+```
+
+To stop the public tunnel later:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\stop_public_tunnel.ps1"
+```
+
 ## Example Commands
 
 Square lattice band structure + DOS:
