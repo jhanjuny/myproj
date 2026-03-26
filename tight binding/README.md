@@ -65,6 +65,13 @@ cd C:\ml\projects\myproj
 powershell -ExecutionPolicy Bypass -File "tight binding\stop_public_tunnel.ps1"
 ```
 
+To check whether the saved public URL is still alive or only a stale record:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\status_public_tunnel.ps1" -Port 8010
+```
+
 ## Example Commands
 
 Square lattice band structure + DOS:

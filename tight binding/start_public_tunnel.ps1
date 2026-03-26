@@ -24,6 +24,8 @@ $ServerStdout = Join-Path $StateDir "server_stdout.log"
 $ServerStderr = Join-Path $StateDir "server_stderr.log"
 $TunnelStdout = Join-Path $StateDir "cloudflared_stdout.log"
 $TunnelStderr = Join-Path $StateDir "cloudflared_stderr.log"
+$TailscaleStdout = Join-Path $StateDir "tailscale_stdout.log"
+$TailscaleStderr = Join-Path $StateDir "tailscale_stderr.log"
 $ServerPidFile = Join-Path $StateDir "server.pid"
 $TunnelPidFile = Join-Path $StateDir "tunnel.pid"
 $UrlFile = Join-Path $StateDir "public_url.txt"
@@ -148,6 +150,48 @@ function Find-RegexInFiles {
     return $null
 }
 
+function Invoke-NativeCapture {
+    param(
+        [string]$FilePath,
+        [string[]]$Arguments,
+        [string]$StdoutPath,
+        [string]$StderrPath
+    )
+
+    foreach ($Path in @($StdoutPath, $StderrPath)) {
+        if (Test-Path -LiteralPath $Path) {
+            Remove-Item -LiteralPath $Path -Force
+        }
+    }
+
+    $Proc = Start-Process `
+        -FilePath $FilePath `
+        -ArgumentList $Arguments `
+        -PassThru `
+        -Wait `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $StdoutPath `
+        -RedirectStandardError $StderrPath
+
+    $Stdout = if (Test-Path -LiteralPath $StdoutPath) {
+        Get-Content -LiteralPath $StdoutPath -Raw -ErrorAction SilentlyContinue
+    } else {
+        ""
+    }
+
+    $Stderr = if (Test-Path -LiteralPath $StderrPath) {
+        Get-Content -LiteralPath $StderrPath -Raw -ErrorAction SilentlyContinue
+    } else {
+        ""
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $Proc.ExitCode
+        Stdout   = $Stdout
+        Stderr   = $Stderr
+    }
+}
+
 function Write-LinkSummary {
     param(
         [string]$PublicUrl,
@@ -219,19 +263,25 @@ function Start-TailscaleFunnel {
     Stop-ExistingProcess -PidFile $TunnelPidFile
 
     try {
-        & $TailscaleExe funnel reset | Out-Null
+        [void](Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "reset") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr)
     } catch {
     }
 
-    $FunnelOutput = & $TailscaleExe funnel --bg --yes $RootDir 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $JoinedOutput = ($FunnelOutput | Out-String).Trim()
+    $FunnelResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "--bg", "--yes", $RootDir) -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
+    if ($FunnelResult.ExitCode -ne 0) {
+        $JoinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
         throw "tailscale funnel failed: $JoinedOutput"
     }
 
     Start-Sleep -Seconds 2
 
-    $StatusJson = & $TailscaleExe status --json | ConvertFrom-Json
+    $StatusResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("status", "--json") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
+    if ($StatusResult.ExitCode -ne 0) {
+        $JoinedOutput = (($StatusResult.Stdout + [Environment]::NewLine + $StatusResult.Stderr).Trim())
+        throw "tailscale status failed: $JoinedOutput"
+    }
+
+    $StatusJson = $StatusResult.Stdout | ConvertFrom-Json
     $DnsName = $StatusJson.Self.DNSName
     if ([string]::IsNullOrWhiteSpace($DnsName)) {
         throw "Could not determine the Tailscale DNS name."
@@ -243,10 +293,11 @@ function Start-TailscaleFunnel {
 
     Write-LinkSummary -PublicUrl $PublicUrl -BackendName "tailscale funnel (stable ts.net URL)"
 
-    if ($FunnelOutput) {
+    $CombinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
+    if ($CombinedOutput) {
         Write-Host ""
         Write-Host "tailscale output:"
-        $FunnelOutput | ForEach-Object { Write-Host "  $_" }
+        ($CombinedOutput -split "`r?`n") | ForEach-Object { if ($_ -ne "") { Write-Host "  $_" } }
     }
 }
 
