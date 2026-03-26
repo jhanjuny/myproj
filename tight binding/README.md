@@ -26,6 +26,22 @@ cd C:\ml\projects\myproj
 D:\conda_envs\torch\python.exe "tight binding\run_tb.py" --model square --mode both
 ```
 
+## Browse Results
+
+To browse the whole `tight binding` workspace through one server:
+
+```powershell
+cd C:\ml\projects\myproj
+D:\conda_envs\torch\python.exe "tight binding\serve_tight_binding.py" --port 8010
+```
+
+Then open:
+
+- `http://localhost:8010/`
+- `http://localhost:8010/single_layer_graphene/outputs/report.html`
+- `http://localhost:8010/graphene_bond_dimerization/outputs/report.html`
+- `http://localhost:8010/1d_chain_dimerization/outputs/report.html`
+
 ## Example Commands
 
 Square lattice band structure + DOS:
