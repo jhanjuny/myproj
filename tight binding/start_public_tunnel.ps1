@@ -22,7 +22,8 @@ New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 $CloudflaredExe = Join-Path $StateDir "cloudflared.exe"
 $ServerStdout = Join-Path $StateDir "server_stdout.log"
 $ServerStderr = Join-Path $StateDir "server_stderr.log"
-$TunnelLog = Join-Path $StateDir "cloudflared.log"
+$TunnelStdout = Join-Path $StateDir "cloudflared_stdout.log"
+$TunnelStderr = Join-Path $StateDir "cloudflared_stderr.log"
 $ServerPidFile = Join-Path $StateDir "server.pid"
 $TunnelPidFile = Join-Path $StateDir "tunnel.pid"
 $UrlFile = Join-Path $StateDir "public_url.txt"
@@ -42,8 +43,7 @@ function Stop-ExistingProcess {
     }
 
     try {
-        $Proc = Get-Process -Id ([int]$PidValue) -ErrorAction Stop
-        Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue
+        Stop-Process -Id ([int]$PidValue) -Force -ErrorAction Stop
     } catch {
     }
 
@@ -119,6 +119,63 @@ function Wait-TcpPort {
     return $false
 }
 
+function Get-LogTail {
+    param([string]$Path, [int]$Lines = 20)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return @()
+    }
+
+    return Get-Content -LiteralPath $Path -Tail $Lines -ErrorAction SilentlyContinue
+}
+
+function Find-RegexInFiles {
+    param(
+        [string[]]$Paths,
+        [string]$Pattern
+    )
+
+    foreach ($Path in $Paths) {
+        if (-not (Test-Path -LiteralPath $Path)) {
+            continue
+        }
+        $Content = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+        if ($Content -match $Pattern) {
+            return $matches[0]
+        }
+    }
+
+    return $null
+}
+
+function Write-LinkSummary {
+    param(
+        [string]$PublicUrl,
+        [string]$BackendName,
+        [string]$ServerPid = "",
+        [string]$TunnelPid = ""
+    )
+
+    Write-Host "tight binding root is being served from: $RootDir"
+    if (-not [string]::IsNullOrWhiteSpace($ServerPid)) {
+        Write-Host "local root:   http://localhost:$Port/"
+    }
+    Write-Host "public root:  $PublicUrl/"
+    Write-Host "backend:      $BackendName"
+    Write-Host "graphene:     $PublicUrl/single_layer_graphene/outputs/report.html"
+    Write-Host "dimerization: $PublicUrl/graphene_bond_dimerization/outputs/report.html"
+    Write-Host "1d chain:     $PublicUrl/1d_chain_dimerization/outputs/report.html"
+    Write-Host "ab cluster:   $PublicUrl/graphene_ab_pair_cluster/outputs/report.html"
+    if (-not [string]::IsNullOrWhiteSpace($ServerPid)) {
+        Write-Host "server pid:   $ServerPid"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TunnelPid)) {
+        Write-Host "tunnel pid:   $TunnelPid"
+    }
+    Write-Host "state dir:    $StateDir"
+    Write-Host "note:         rerun any tight binding project and refresh the page; the same root server will serve the updated files."
+}
+
 function Start-LocalServer {
     Stop-ExistingProcess -PidFile $ServerPidFile
 
@@ -156,12 +213,22 @@ function Start-TailscaleFunnel {
         throw "Tailscale CLI was not found."
     }
 
+    Write-Host "Starting Tailscale Funnel on the tight binding root..."
+
+    Stop-ExistingProcess -PidFile $ServerPidFile
+    Stop-ExistingProcess -PidFile $TunnelPidFile
+
     try {
         & $TailscaleExe funnel reset | Out-Null
     } catch {
     }
 
-    $FunnelOutput = & $TailscaleExe funnel --bg --yes "http://127.0.0.1:$Port" 2>&1
+    $FunnelOutput = & $TailscaleExe funnel --bg --yes $RootDir 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        $JoinedOutput = ($FunnelOutput | Out-String).Trim()
+        throw "tailscale funnel failed: $JoinedOutput"
+    }
+
     Start-Sleep -Seconds 2
 
     $StatusJson = & $TailscaleExe status --json | ConvertFrom-Json
@@ -173,30 +240,22 @@ function Start-TailscaleFunnel {
     $PublicUrl = "https://" + $DnsName.TrimEnd(".")
     $PublicUrl | Set-Content -LiteralPath $UrlFile -Encoding ascii
     "tailscale" | Set-Content -LiteralPath $BackendFile -Encoding ascii
-    if (Test-Path -LiteralPath $TunnelPidFile) {
-        Remove-Item -LiteralPath $TunnelPidFile -Force -ErrorAction SilentlyContinue
-    }
 
-    Write-Output "tight binding root is being served from: $RootDir"
-    Write-Output "local root:   http://localhost:$Port/"
-    Write-Output "public root:  $PublicUrl/"
-    Write-Output "backend:      tailscale funnel"
-    Write-Output "graphene:     $PublicUrl/single_layer_graphene/outputs/report.html"
-    Write-Output "dimerization: $PublicUrl/graphene_bond_dimerization/outputs/report.html"
-    Write-Output "1d chain:     $PublicUrl/1d_chain_dimerization/outputs/report.html"
-    Write-Output "ab cluster:   $PublicUrl/graphene_ab_pair_cluster/outputs/report.html"
-    Write-Output "server pid:   $((Get-Content -LiteralPath $ServerPidFile | Select-Object -First 1).Trim())"
-    Write-Output "state dir:    $StateDir"
-    Write-Output "note:         rerun any tight binding project and refresh the page; the same root server will serve the updated files."
+    Write-LinkSummary -PublicUrl $PublicUrl -BackendName "tailscale funnel (stable ts.net URL)"
 
     if ($FunnelOutput) {
-        Write-Output ""
-        Write-Output "tailscale output:"
-        $FunnelOutput | ForEach-Object { Write-Output "  $_" }
+        Write-Host ""
+        Write-Host "tailscale output:"
+        $FunnelOutput | ForEach-Object { Write-Host "  $_" }
     }
 }
 
 function Start-CloudflaredTunnel {
+    Write-Host "Starting local HTTP server for tight binding..."
+    $ServerProc = Start-LocalServer
+
+    Write-Host "Starting cloudflared public tunnel..."
+
     Stop-ExistingProcess -PidFile $TunnelPidFile
 
     if (-not (Test-Path -LiteralPath $CloudflaredExe)) {
@@ -205,61 +264,70 @@ function Start-CloudflaredTunnel {
             -OutFile $CloudflaredExe
     }
 
-    if (Test-Path -LiteralPath $TunnelLog) { Remove-Item -LiteralPath $TunnelLog -Force }
+    foreach ($Path in @($TunnelStdout, $TunnelStderr)) {
+        if (Test-Path -LiteralPath $Path) {
+            Remove-Item -LiteralPath $Path -Force
+        }
+    }
 
-    $QuotedTunnelLog = '"' + $TunnelLog + '"'
     $TunnelProc = Start-Process `
         -FilePath $CloudflaredExe `
-        -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$Port", "--no-autoupdate", "--logfile", $QuotedTunnelLog) `
+        -ArgumentList @("tunnel", "--url", "http://127.0.0.1:$Port", "--no-autoupdate") `
         -PassThru `
-        -WindowStyle Hidden
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $TunnelStdout `
+        -RedirectStandardError $TunnelStderr
 
     $TunnelProc.Id | Set-Content -LiteralPath $TunnelPidFile -Encoding ascii
 
     $PublicUrl = $null
-    for ($Index = 0; $Index -lt 60; $Index++) {
+    for ($Index = 0; $Index -lt 45; $Index++) {
         Start-Sleep -Seconds 1
         if ($TunnelProc.HasExited) {
             break
         }
-        if (Test-Path -LiteralPath $TunnelLog) {
-            $Content = Get-Content -LiteralPath $TunnelLog -Raw -ErrorAction SilentlyContinue
-            if ($Content -match "https://[-a-z0-9]+\.trycloudflare\.com") {
-                $PublicUrl = $matches[0]
-                break
-            }
+        $PublicUrl = Find-RegexInFiles -Paths @($TunnelStdout, $TunnelStderr) -Pattern "https://[-a-z0-9]+\.trycloudflare\.com"
+        if ($PublicUrl) {
+            break
         }
     }
 
     if (-not $PublicUrl) {
+        $StdoutTail = Get-LogTail -Path $TunnelStdout
+        $StderrTail = Get-LogTail -Path $TunnelStderr
         Stop-Process -Id $TunnelProc.Id -Force -ErrorAction SilentlyContinue
-        throw "Failed to obtain a public cloudflared URL. Check $TunnelLog"
+        Stop-ExistingProcess -PidFile $ServerPidFile
+
+        $MessageLines = @(
+            "Failed to obtain a public cloudflared URL.",
+            "stdout: $TunnelStdout",
+            "stderr: $TunnelStderr"
+        )
+        if ($StdoutTail.Count -gt 0) {
+            $MessageLines += ""
+            $MessageLines += "cloudflared stdout tail:"
+            $MessageLines += $StdoutTail
+        }
+        if ($StderrTail.Count -gt 0) {
+            $MessageLines += ""
+            $MessageLines += "cloudflared stderr tail:"
+            $MessageLines += $StderrTail
+        }
+
+        throw ($MessageLines -join [Environment]::NewLine)
     }
 
     $PublicUrl | Set-Content -LiteralPath $UrlFile -Encoding ascii
     "cloudflared" | Set-Content -LiteralPath $BackendFile -Encoding ascii
 
-    Write-Output "tight binding root is being served from: $RootDir"
-    Write-Output "local root:   http://localhost:$Port/"
-    Write-Output "public root:  $PublicUrl/"
-    Write-Output "backend:      cloudflared (temporary public URL)"
-    Write-Output "graphene:     $PublicUrl/single_layer_graphene/outputs/report.html"
-    Write-Output "dimerization: $PublicUrl/graphene_bond_dimerization/outputs/report.html"
-    Write-Output "1d chain:     $PublicUrl/1d_chain_dimerization/outputs/report.html"
-    Write-Output "ab cluster:   $PublicUrl/graphene_ab_pair_cluster/outputs/report.html"
-    Write-Output "server pid:   $((Get-Content -LiteralPath $ServerPidFile | Select-Object -First 1).Trim())"
-    Write-Output "tunnel pid:   $($TunnelProc.Id)"
-    Write-Output "state dir:    $StateDir"
-    Write-Output "note:         rerun any tight binding project and refresh the page; the same root server will serve the updated files."
-    Write-Output "warning:      this public URL changes each time the tunnel is restarted."
+    Write-LinkSummary -PublicUrl $PublicUrl -BackendName "cloudflared (temporary public URL)" -ServerPid "$($ServerProc.Id)" -TunnelPid "$($TunnelProc.Id)"
+    Write-Host "warning:      this public URL changes each time the tunnel is restarted."
 }
 
 if (Test-Path -LiteralPath $UrlFile) { Remove-Item -LiteralPath $UrlFile -Force -ErrorAction SilentlyContinue }
 if (Test-Path -LiteralPath $BackendFile) { Remove-Item -LiteralPath $BackendFile -Force -ErrorAction SilentlyContinue }
 
-$ServerProc = Start-LocalServer
 $TailscaleExe = Resolve-TailscaleExe
-
 $SelectedBackend = $Backend
 if ($Backend -eq "auto") {
     if ($TailscaleExe) {
@@ -275,7 +343,6 @@ if ($SelectedBackend -eq "tailscale") {
         exit 0
     } catch {
         if ($Backend -eq "tailscale") {
-            Stop-ExistingProcess -PidFile $ServerPidFile
             throw
         }
 
