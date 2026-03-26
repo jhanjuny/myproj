@@ -52,6 +52,12 @@ cd C:\ml\projects\myproj
 powershell -ExecutionPolicy Bypass -File "tight binding\start_public_tunnel.ps1" -Port 8010
 ```
 
+Behavior:
+
+- the whole `tight binding` root is served, so rerunning a project updates the same server immediately
+- the script now prefers a stable Tailscale Funnel `https://<machine>.<tailnet>.ts.net/` URL when available
+- if Tailscale Funnel is unavailable, it falls back to a temporary Cloudflare tunnel URL
+
 To stop the public tunnel later:
 
 ```powershell
