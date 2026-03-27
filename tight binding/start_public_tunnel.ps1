@@ -259,15 +259,15 @@ function Start-TailscaleFunnel {
 
     Write-Host "Starting Tailscale Funnel on the tight binding root..."
 
-    Stop-ExistingProcess -PidFile $ServerPidFile
     Stop-ExistingProcess -PidFile $TunnelPidFile
+    $ServerProc = Start-LocalServer
 
     try {
         [void](Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "reset") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr)
     } catch {
     }
 
-    $FunnelResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "--bg", "--yes", $RootDir) -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
+    $FunnelResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "--bg", "--yes", "http://127.0.0.1:$Port") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
     if ($FunnelResult.ExitCode -ne 0) {
         $JoinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
         if ($JoinedOutput -match "Access is denied") {
@@ -278,6 +278,7 @@ function Start-TailscaleFunnel {
             $JoinedOutput += [Environment]::NewLine
             $JoinedOutput += "  powershell -ExecutionPolicy Bypass -Command ""& '$($MyInvocation.MyCommand.Path)' -Port $Port -Backend tailscale"""
         }
+        Stop-ExistingProcess -PidFile $ServerPidFile
         throw "tailscale funnel failed: $JoinedOutput"
     }
 
@@ -294,6 +295,7 @@ function Start-TailscaleFunnel {
             $JoinedOutput += [Environment]::NewLine
             $JoinedOutput += "  powershell -ExecutionPolicy Bypass -Command ""& '$($MyInvocation.MyCommand.Path)' -Port $Port -Backend tailscale"""
         }
+        Stop-ExistingProcess -PidFile $ServerPidFile
         throw "tailscale status failed: $JoinedOutput"
     }
 
@@ -307,7 +309,7 @@ function Start-TailscaleFunnel {
     $PublicUrl | Set-Content -LiteralPath $UrlFile -Encoding ascii
     "tailscale" | Set-Content -LiteralPath $BackendFile -Encoding ascii
 
-    Write-LinkSummary -PublicUrl $PublicUrl -BackendName "tailscale funnel (stable ts.net URL)"
+    Write-LinkSummary -PublicUrl $PublicUrl -BackendName "tailscale funnel (stable ts.net URL)" -ServerPid "$($ServerProc.Id)"
 
     $CombinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
     if ($CombinedOutput) {
