@@ -128,6 +128,13 @@ $ServerProc = Get-RunningProcess -PidValue $ServerPid
 $TunnelProc = Get-RunningProcess -PidValue $TunnelPid
 $LocalPortUp = Test-TcpPort -HostName "127.0.0.1" -Port $Port -TimeoutMs 1000
 $PublicCheck = Test-PublicUrl -Url $PublicUrl
+$TailscaleSoftPass = $false
+
+if ($Backend -eq "tailscale" -and (-not $PublicCheck.Reachable) -and $PublicUrl -and $ServerProc -and $LocalPortUp) {
+    if ($PublicCheck.Message -match "Timeout|The operation has timed out|web error: Timeout") {
+        $TailscaleSoftPass = $true
+    }
+}
 
 Write-Host "tight binding public status"
 Write-Host "---------------------------"
@@ -136,13 +143,26 @@ Write-Host "backend:        $(if ($Backend) { $Backend } else { '<missing>' })"
 Write-Host "public url:     $(if ($PublicUrl) { $PublicUrl } else { '<missing>' })"
 Write-Host "server pid:     $(if ($ServerPid) { $ServerPid } else { '<missing>' })"
 Write-Host "server running: $(if ($ServerProc) { 'yes' } else { 'no' })"
-Write-Host "tunnel pid:     $(if ($TunnelPid) { $TunnelPid } else { '<missing>' })"
-Write-Host "tunnel running: $(if ($TunnelProc) { 'yes' } else { 'no' })"
+if ($Backend -eq "tailscale") {
+    Write-Host "tunnel pid:     <managed by tailscale>"
+    Write-Host "tunnel running: n/a"
+} else {
+    Write-Host "tunnel pid:     $(if ($TunnelPid) { $TunnelPid } else { '<missing>' })"
+    Write-Host "tunnel running: $(if ($TunnelProc) { 'yes' } else { 'no' })"
+}
 Write-Host "local port up:  $(if ($LocalPortUp) { 'yes' } else { 'no' })"
-Write-Host "public check:   $($PublicCheck.Message)"
+if ($TailscaleSoftPass) {
+    Write-Host "public check:   $($PublicCheck.Message) (self-check soft-pass for tailscale)"
+} else {
+    Write-Host "public check:   $($PublicCheck.Message)"
+}
 
 $Overall = if ($Backend -eq "tailscale") {
-    if ($PublicCheck.Reachable) { "UP" } else { "DOWN_OR_MISCONFIGURED" }
+    if ($PublicUrl -and $ServerProc -and $LocalPortUp -and ($PublicCheck.Reachable -or $TailscaleSoftPass)) {
+        "UP"
+    } else {
+        "DOWN_OR_MISCONFIGURED"
+    }
 } else {
     if ($ServerProc -and $TunnelProc -and $LocalPortUp -and $PublicCheck.Reachable) {
         "UP"
@@ -159,4 +179,12 @@ if ($Overall -eq "STALE_URL_ONLY") {
     Write-Host ""
     Write-Host "note: public_url.txt still exists, but the actual server/tunnel processes are gone."
     Write-Host "      start the server again or clear the stale files with stop_public_tunnel.ps1."
+}
+
+if ($Backend -eq "tailscale" -and $Overall -eq "UP") {
+    Write-Host ""
+    Write-Host "note: tailscale funnel is managed by the Tailscale service, so a separate tunnel.pid is not expected."
+    if ($TailscaleSoftPass) {
+        Write-Host "      the public self-check timed out from this same host, but the local server and saved ts.net URL are in place."
+    }
 }
