@@ -159,19 +159,17 @@ function Invoke-NativeCapture {
         [int]$TimeoutSeconds = 20
     )
 
-    foreach ($Path in @($StdoutPath, $StderrPath)) {
-        if (Test-Path -LiteralPath $Path) {
-            Remove-Item -LiteralPath $Path -Force
-        }
-    }
+    $CaptureId = [guid]::NewGuid().ToString("N")
+    $StdoutCapture = Join-Path ([System.IO.Path]::GetDirectoryName($StdoutPath)) (([System.IO.Path]::GetFileNameWithoutExtension($StdoutPath)) + "_" + $CaptureId + [System.IO.Path]::GetExtension($StdoutPath))
+    $StderrCapture = Join-Path ([System.IO.Path]::GetDirectoryName($StderrPath)) (([System.IO.Path]::GetFileNameWithoutExtension($StderrPath)) + "_" + $CaptureId + [System.IO.Path]::GetExtension($StderrPath))
 
     $Proc = Start-Process `
         -FilePath $FilePath `
         -ArgumentList $Arguments `
         -PassThru `
         -WindowStyle Hidden `
-        -RedirectStandardOutput $StdoutPath `
-        -RedirectStandardError $StderrPath
+        -RedirectStandardOutput $StdoutCapture `
+        -RedirectStandardError $StderrCapture
 
     $TimedOut = $false
     if (-not $Proc.WaitForExit($TimeoutSeconds * 1000)) {
@@ -183,16 +181,25 @@ function Invoke-NativeCapture {
         $Proc.WaitForExit()
     }
 
-    $Stdout = if (Test-Path -LiteralPath $StdoutPath) {
-        Get-Content -LiteralPath $StdoutPath -Raw -ErrorAction SilentlyContinue
+    $Stdout = if (Test-Path -LiteralPath $StdoutCapture) {
+        Get-Content -LiteralPath $StdoutCapture -Raw -ErrorAction SilentlyContinue
     } else {
         ""
     }
 
-    $Stderr = if (Test-Path -LiteralPath $StderrPath) {
-        Get-Content -LiteralPath $StderrPath -Raw -ErrorAction SilentlyContinue
+    $Stderr = if (Test-Path -LiteralPath $StderrCapture) {
+        Get-Content -LiteralPath $StderrCapture -Raw -ErrorAction SilentlyContinue
     } else {
         ""
+    }
+
+    foreach ($Path in @($StdoutCapture, $StderrCapture)) {
+        if (Test-Path -LiteralPath $Path) {
+            try {
+                Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+            } catch {
+            }
+        }
     }
 
     return [pscustomobject]@{
