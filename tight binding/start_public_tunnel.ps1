@@ -228,6 +228,7 @@ function Write-LinkSummary {
     Write-Host "dimerization: $PublicUrl/graphene_bond_dimerization/outputs/report.html"
     Write-Host "1d chain:     $PublicUrl/1d_chain_dimerization/outputs/report.html"
     Write-Host "ab cluster:   $PublicUrl/graphene_ab_pair_cluster/outputs/report.html"
+    Write-Host "CrO:          $PublicUrl/cro_minimal/outputs/report.html"
     if (-not [string]::IsNullOrWhiteSpace($ServerPid)) {
         Write-Host "server pid:   $ServerPid"
     }

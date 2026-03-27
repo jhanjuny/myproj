@@ -191,3 +191,94 @@ def export_reciprocal_surfaces_html(
     plotter.camera.zoom(1.3)
     plotter.export_html(str(output_path))
     plotter.close()
+
+
+def export_reciprocal_volume_html(
+    output_path: Path,
+    title: str,
+    xyz_points: Sequence[Sequence[float]],
+    valence_energies: Sequence[float],
+    conduction_energies: Sequence[float],
+    k_path: Sequence[Sequence[float]],
+    k_labels: Sequence[str],
+    energy_limit: float,
+    window_size: tuple[int, int] = (1380, 920),
+) -> None:
+    cache_root = output_path.parent / ".runtime_cache"
+    _ensure_runtime_cache(cache_root)
+
+    import pyvista as pv
+
+    points_xyz = np.asarray(xyz_points, dtype=float)
+    valence = np.asarray(valence_energies, dtype=float)
+    conduction = np.asarray(conduction_energies, dtype=float)
+    path_points = np.asarray(k_path, dtype=float)
+
+    if points_xyz.ndim != 2 or points_xyz.shape[1] != 3:
+        raise ValueError("xyz_points must be shaped (N, 3)")
+    if not (len(points_xyz) == len(valence) == len(conduction)):
+        raise ValueError("point and energy arrays must have the same length")
+
+    plotter = pv.Plotter(off_screen=True, window_size=window_size)
+    plotter.set_background("white")
+
+    clim = (-float(energy_limit), float(energy_limit))
+
+    valence_cloud = pv.PolyData(points_xyz.copy())
+    valence_cloud["energy"] = valence
+    plotter.add_mesh(
+        valence_cloud,
+        scalars="energy",
+        cmap="coolwarm",
+        clim=clim,
+        point_size=12,
+        render_points_as_spheres=True,
+        opacity=0.45,
+        show_scalar_bar=True,
+        scalar_bar_args={"title": "Energy", "vertical": True},
+    )
+
+    conduction_cloud = pv.PolyData(points_xyz.copy())
+    conduction_cloud["energy"] = conduction
+    plotter.add_mesh(
+        conduction_cloud,
+        scalars="energy",
+        cmap="coolwarm",
+        clim=clim,
+        point_size=6,
+        render_points_as_spheres=True,
+        opacity=0.9,
+        show_scalar_bar=False,
+    )
+
+    bounds = (
+        float(points_xyz[:, 0].min()),
+        float(points_xyz[:, 0].max()),
+        float(points_xyz[:, 1].min()),
+        float(points_xyz[:, 1].max()),
+        float(points_xyz[:, 2].min()),
+        float(points_xyz[:, 2].max()),
+    )
+    box = pv.Box(bounds=bounds)
+    plotter.add_mesh(box.extract_feature_edges(), color="black", line_width=2.5, opacity=0.55)
+
+    path_curve = pv.Spline(path_points, n_points=max(180, 100 * (len(path_points) - 1)))
+    plotter.add_mesh(path_curve, color="#1f1f1f", line_width=5)
+    plotter.add_point_labels(
+        path_points,
+        list(k_labels),
+        point_size=12,
+        font_size=18,
+        always_visible=True,
+        shape_opacity=0.12,
+        fill_shape=True,
+        shape_color="white",
+        text_color="black",
+    )
+
+    plotter.add_axes(line_width=2, labels_off=False)
+    plotter.add_text(title, position="upper_edge", font_size=14, color="black")
+    plotter.view_isometric()
+    plotter.camera.zoom(1.15)
+    plotter.export_html(str(output_path))
+    plotter.close()

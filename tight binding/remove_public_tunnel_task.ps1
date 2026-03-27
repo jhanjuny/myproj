@@ -1,5 +1,6 @@
 param(
-    [string]$TaskName = "TightBindingPublicTunnel"
+    [string]$TaskName = "TightBindingPublicTunnel",
+    [string]$WatchdogTaskName = "TightBindingPublicTunnelWatchdog"
 )
 
 $ErrorActionPreference = "Stop"
@@ -9,5 +10,11 @@ try {
     Write-Host "Scheduled task removed: $TaskName"
 } catch {
     Write-Host "Scheduled task not found or could not be removed: $TaskName"
-    throw
+}
+
+try {
+    & schtasks.exe /Delete /TN $WatchdogTaskName /F | Out-Null
+    Write-Host "Scheduled task removed: $WatchdogTaskName"
+} catch {
+    Write-Host "Scheduled task not found or could not be removed: $WatchdogTaskName"
 }

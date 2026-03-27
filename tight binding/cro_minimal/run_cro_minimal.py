@@ -15,7 +15,11 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from tb.export import ensure_dir, write_band_csv, write_band_svg, write_dos_csv, write_dos_svg
-from tb.interactive_3d import export_atomic_scene_html, export_reciprocal_surfaces_html, pyvista_is_available
+from tb.interactive_3d import (
+    export_atomic_scene_html,
+    export_reciprocal_volume_html,
+    pyvista_is_available,
+)
 from tb.kpath import sample_k_path
 
 
@@ -333,6 +337,35 @@ def compute_slice_map(
             valence, conduction = valence_conduction_pair(values)
             rows.append((kx, ky, valence, conduction))
     return rows
+
+
+def compute_volume_map(
+    band_fn,
+    bx: float,
+    by: float,
+    bz: float,
+    grid_n: int,
+) -> list[tuple[float, float, float, float, float]]:
+    samples = max(9, int(grid_n))
+    kx_values = np.linspace(-0.5 * bx, 0.5 * bx, samples)
+    ky_values = np.linspace(-0.5 * by, 0.5 * by, samples)
+    kz_values = np.linspace(-0.5 * bz, 0.5 * bz, samples)
+    rows: list[tuple[float, float, float, float, float]] = []
+    for kz in kz_values:
+        for ky in ky_values:
+            for kx in kx_values:
+                values = band_fn(np.array([kx, ky, kz], dtype=float))
+                valence, conduction = valence_conduction_pair(values)
+                rows.append((kx, ky, kz, valence, conduction))
+    return rows
+
+
+def write_volume_csv(path: Path, rows: list[tuple[float, float, float, float, float]]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["kx", "ky", "kz", "top_valence", "bottom_conduction"])
+        for kx, ky, kz, valence, conduction in rows:
+            writer.writerow([f"{kx:.8f}", f"{ky:.8f}", f"{kz:.8f}", f"{valence:.8f}", f"{conduction:.8f}"])
 
 
 def write_slice_csv(path: Path, rows: list[tuple[float, float, float, float]]) -> None:
@@ -764,7 +797,21 @@ def write_formula_html(
     The static and interactive reciprocal-space figures show E<sub>v</sub>(k<sub>x</sub>,k<sub>y</sub>,0) and E<sub>c</sub>(k<sub>x</sub>,k<sub>y</sub>,0).
   </div>
 
-  <h2>9. Bond Table Used in This Run</h2>
+  <h2>9. Full 3D Reciprocal-Space Volume</h2>
+  <div class="equation">
+    For the interactive 3D reciprocal-space plot, the code samples the full orthorhombic reciprocal box
+    (k<sub>x</sub>, k<sub>y</sub>, k<sub>z</sub>) and assigns
+    E<sub>v</sub>(k<sub>x</sub>,k<sub>y</sub>,k<sub>z</sub>) and
+    E<sub>c</sub>(k<sub>x</sub>,k<sub>y</sub>,k<sub>z</sub>)
+    to each sampled point.
+  </div>
+  <div class="equation">
+    k<sub>x</sub> &in; [-|b<sub>1</sub>|/2, |b<sub>1</sub>|/2], &nbsp;
+    k<sub>y</sub> &in; [-|b<sub>2</sub>|/2, |b<sub>2</sub>|/2], &nbsp;
+    k<sub>z</sub> &in; [-|b<sub>3</sub>|/2, |b<sub>3</sub>|/2]
+  </div>
+
+  <h2>10. Bond Table Used in This Run</h2>
   <table>
     <thead>
       <tr>
@@ -837,7 +884,7 @@ def write_report_html(
   <img src="band_structure.svg" alt="CrO band structure" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
   <h2 style="margin-top: 28px;">k<sub>z</sub> = 0 Reciprocal Slice</h2>
   <img src="reciprocal_space_map.svg" alt="CrO reciprocal-space slice" style="max-width: 100%; border: 1px solid #d0d0d0; border-radius: 10px;" />
-  <h2 style="margin-top: 28px;">Interactive 3D Reciprocal Space</h2>
+  <h2 style="margin-top: 28px;">Interactive 3D Reciprocal Volume</h2>
   {reciprocal_block}
   <h2 style="margin-top: 28px;">Calculation Formulas</h2>
   <p><a href="calculation_formulas.html">Open the formula file directly</a></p>
@@ -862,6 +909,7 @@ def main() -> None:
     parser.add_argument("--samples-per-segment", type=int, default=90)
     parser.add_argument("--dos-grid", type=int, default=18)
     parser.add_argument("--slice-grid", type=int, default=55)
+    parser.add_argument("--volume-grid", type=int, default=17)
     parser.add_argument("--energy-points", type=int, default=360)
     parser.add_argument("--broadening", type=float, default=0.08)
     parser.add_argument("--out-dir", type=str, default="")
@@ -920,7 +968,9 @@ def main() -> None:
 
     bx = float(np.linalg.norm(b1))
     by = float(np.linalg.norm(b2))
+    bz = float(np.linalg.norm(b3))
     slice_rows = compute_slice_map(band_fn=band_fn, bx=bx, by=by, kz_value=0.0, grid_n=args.slice_grid)
+    volume_rows = compute_volume_map(band_fn=band_fn, bx=bx, by=by, bz=bz, grid_n=args.volume_grid)
     slice_path = [
         ("G", np.array([0.0, 0.0, 0.0], dtype=float)),
         ("X", np.array([0.5 * bx, 0.0, 0.0], dtype=float)),
@@ -945,6 +995,7 @@ def main() -> None:
     dos_csv = out_dir / "dos.csv"
     dos_svg = out_dir / "dos.svg"
     reciprocal_csv = out_dir / "reciprocal_space_map.csv"
+    reciprocal_volume_csv = out_dir / "reciprocal_space_volume.csv"
     reciprocal_svg = out_dir / "reciprocal_space_map.svg"
     reciprocal_html = out_dir / "reciprocal_space_interactive.html"
     report_html = out_dir / "report.html"
@@ -958,6 +1009,7 @@ def main() -> None:
     write_dos_csv(dos_csv, energy_axis, dos)
     write_dos_svg(dos_svg, "CrO minimal structure-derived DOS", energy_axis, dos)
     write_slice_csv(reciprocal_csv, slice_rows)
+    write_volume_csv(reciprocal_volume_csv, volume_rows)
     write_slice_svg(reciprocal_svg, "CrO reciprocal-space slice (kz = 0)", slice_rows, bx, by, slice_path, energy_limit)
 
     interactive_ok, interactive_reason = pyvista_is_available(out_dir)
@@ -983,18 +1035,17 @@ def main() -> None:
             status_lines.append(f"Real-space interactive HTML export failed: {type(exc).__name__}: {exc}")
 
         try:
-            reciprocal_points = np.array([[row[0], row[1]] for row in slice_rows], dtype=float)
-            lower_energies = np.array([row[2] for row in slice_rows], dtype=float)
-            upper_energies = np.array([row[3] for row in slice_rows], dtype=float)
-            export_reciprocal_surfaces_html(
+            reciprocal_points = np.array([[row[0], row[1], row[2]] for row in volume_rows], dtype=float)
+            lower_energies = np.array([row[3] for row in volume_rows], dtype=float)
+            upper_energies = np.array([row[4] for row in volume_rows], dtype=float)
+            export_reciprocal_volume_html(
                 output_path=reciprocal_html,
-                title="CrO reciprocal-space surfaces on kz = 0",
-                xy_points=reciprocal_points,
-                lower_energies=lower_energies,
-                upper_energies=upper_energies,
-                polygon_vertices=np.array([[-0.5 * bx, -0.5 * by], [0.5 * bx, -0.5 * by], [0.5 * bx, 0.5 * by], [-0.5 * bx, 0.5 * by]], dtype=float),
-                k_path=np.vstack([point[:2] for _, point in slice_path]),
-                k_labels=[label for label, _ in slice_path],
+                title="CrO reciprocal-space valence/conduction volume",
+                xyz_points=reciprocal_points,
+                valence_energies=lower_energies,
+                conduction_energies=upper_energies,
+                k_path=np.vstack([point for _, point in band_path]),
+                k_labels=[label for label, _ in band_path],
                 energy_limit=energy_limit,
             )
             reciprocal_interactive_ok = True
@@ -1019,6 +1070,7 @@ def main() -> None:
     print(f"[dos csv]   {dos_csv}")
     print(f"[dos svg]   {dos_svg}")
     print(f"[k-map csv] {reciprocal_csv}")
+    print(f"[k-vol csv] {reciprocal_volume_csv}")
     print(f"[k-map svg] {reciprocal_svg}")
     print(f"[k-map 3d]  {reciprocal_html}")
     print(f"[report]    {report_html}")

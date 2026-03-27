@@ -28,6 +28,7 @@ D:\conda_envs\torch\python.exe "tight binding\cro_minimal\run_cro_minimal.py"
 - `outputs/band_structure.svg`
 - `outputs/dos.svg`
 - `outputs/reciprocal_space_map.svg`
+- `outputs/reciprocal_space_volume.csv`
 - `outputs/reciprocal_space_interactive.html`
 - `outputs/calculation_formulas.html`
 - `outputs/report.html`
@@ -41,6 +42,7 @@ D:\conda_envs\torch\python.exe "tight binding\cro_minimal\run_cro_minimal.py"
 - `--nn-cutoff`
 - `--dos-grid`
 - `--slice-grid`
+- `--volume-grid`
 
 Example:
 

@@ -79,6 +79,18 @@ cd C:\ml\projects\myproj
 powershell -ExecutionPolicy Bypass -File "tight binding\install_public_tunnel_task.ps1" -Port 8010
 ```
 
+That registration now creates:
+
+- a logon task that opens the public tunnel
+- a watchdog task that checks every few minutes and restarts the tunnel if the local server dies unexpectedly
+
+To manually run the watchdog once:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\ensure_public_tunnel.ps1" -Port 8010
+```
+
 To remove that scheduled task later:
 
 ```powershell
