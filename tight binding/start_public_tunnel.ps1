@@ -270,6 +270,14 @@ function Start-TailscaleFunnel {
     $FunnelResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "--bg", "--yes", $RootDir) -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
     if ($FunnelResult.ExitCode -ne 0) {
         $JoinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
+        if ($JoinedOutput -match "Access is denied") {
+            $JoinedOutput += [Environment]::NewLine
+            $JoinedOutput += "Tailscale LocalAPI access was denied from this shell."
+            $JoinedOutput += [Environment]::NewLine
+            $JoinedOutput += "To use a stable ts.net link, run this command from an Administrator PowerShell on the remote PC:"
+            $JoinedOutput += [Environment]::NewLine
+            $JoinedOutput += "  powershell -ExecutionPolicy Bypass -Command ""& '$($MyInvocation.MyCommand.Path)' -Port $Port -Backend tailscale"""
+        }
         throw "tailscale funnel failed: $JoinedOutput"
     }
 
@@ -278,6 +286,14 @@ function Start-TailscaleFunnel {
     $StatusResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("status", "--json") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
     if ($StatusResult.ExitCode -ne 0) {
         $JoinedOutput = (($StatusResult.Stdout + [Environment]::NewLine + $StatusResult.Stderr).Trim())
+        if ($JoinedOutput -match "Access is denied") {
+            $JoinedOutput += [Environment]::NewLine
+            $JoinedOutput += "Tailscale LocalAPI access was denied from this shell."
+            $JoinedOutput += [Environment]::NewLine
+            $JoinedOutput += "To use a stable ts.net link, run this command from an Administrator PowerShell on the remote PC:"
+            $JoinedOutput += [Environment]::NewLine
+            $JoinedOutput += "  powershell -ExecutionPolicy Bypass -Command ""& '$($MyInvocation.MyCommand.Path)' -Port $Port -Backend tailscale"""
+        }
         throw "tailscale status failed: $JoinedOutput"
     }
 

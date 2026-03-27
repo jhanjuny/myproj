@@ -72,6 +72,41 @@ cd C:\ml\projects\myproj
 powershell -ExecutionPolicy Bypass -File "tight binding\status_public_tunnel.ps1" -Port 8010
 ```
 
+To register the tunnel so it auto-starts whenever this user logs in:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\install_public_tunnel_task.ps1" -Port 8010
+```
+
+To remove that scheduled task later:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\remove_public_tunnel_task.ps1"
+```
+
+To inspect the current AC sleep / hibernate settings:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\show_keepawake_settings.ps1"
+```
+
+To keep the remote PC awake on AC power so the public tunnel does not die overnight:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\set_keepawake_settings.ps1"
+```
+
+If you also want the monitor to stay on, pass:
+
+```powershell
+cd C:\ml\projects\myproj
+powershell -ExecutionPolicy Bypass -File "tight binding\set_keepawake_settings.ps1" -AlsoDisableDisplaySleep
+```
+
 ## Example Commands
 
 Square lattice band structure + DOS:
