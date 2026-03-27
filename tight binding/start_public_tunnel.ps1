@@ -286,8 +286,13 @@ function Start-TailscaleFunnel {
     }
 
     $FunnelResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "--bg", "--yes", "http://127.0.0.1:$Port") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr -TimeoutSeconds 20
-    if ($FunnelResult.ExitCode -ne 0) {
-        $JoinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
+    $JoinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
+    $PublicUrl = $null
+    if ($JoinedOutput -match "https://[A-Za-z0-9\.-]+\.ts\.net/?") {
+        $PublicUrl = $matches[0].TrimEnd("/")
+    }
+
+    if (($FunnelResult.ExitCode -ne 0) -and (-not $PublicUrl)) {
         if ($FunnelResult.TimedOut) {
             $JoinedOutput = ("tailscale funnel timed out after 20 seconds." + [Environment]::NewLine + $JoinedOutput).Trim()
         }
@@ -303,43 +308,45 @@ function Start-TailscaleFunnel {
         throw "tailscale funnel failed: $JoinedOutput"
     }
 
-    Start-Sleep -Seconds 2
+    if (-not $PublicUrl) {
+        Start-Sleep -Seconds 2
 
-    $StatusResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("status", "--json") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr -TimeoutSeconds 12
-    if ($StatusResult.ExitCode -ne 0) {
-        $JoinedOutput = (($StatusResult.Stdout + [Environment]::NewLine + $StatusResult.Stderr).Trim())
-        if ($StatusResult.TimedOut) {
-            $JoinedOutput = ("tailscale status timed out after 12 seconds." + [Environment]::NewLine + $JoinedOutput).Trim()
+        $StatusResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("status", "--json") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr -TimeoutSeconds 12
+        if ($StatusResult.ExitCode -ne 0) {
+            $JoinedOutput = (($StatusResult.Stdout + [Environment]::NewLine + $StatusResult.Stderr).Trim())
+            if ($StatusResult.TimedOut) {
+                $JoinedOutput = ("tailscale status timed out after 12 seconds." + [Environment]::NewLine + $JoinedOutput).Trim()
+            }
+            if ($JoinedOutput -match "Access is denied") {
+                $JoinedOutput += [Environment]::NewLine
+                $JoinedOutput += "Tailscale LocalAPI access was denied from this shell."
+                $JoinedOutput += [Environment]::NewLine
+                $JoinedOutput += "To use a stable ts.net link, run this command from an Administrator PowerShell on the remote PC:"
+                $JoinedOutput += [Environment]::NewLine
+                $JoinedOutput += "  powershell -ExecutionPolicy Bypass -Command ""& '$($MyInvocation.MyCommand.Path)' -Port $Port -Backend tailscale"""
+            }
+            Stop-ExistingProcess -PidFile $ServerPidFile
+            throw "tailscale status failed: $JoinedOutput"
         }
-        if ($JoinedOutput -match "Access is denied") {
-            $JoinedOutput += [Environment]::NewLine
-            $JoinedOutput += "Tailscale LocalAPI access was denied from this shell."
-            $JoinedOutput += [Environment]::NewLine
-            $JoinedOutput += "To use a stable ts.net link, run this command from an Administrator PowerShell on the remote PC:"
-            $JoinedOutput += [Environment]::NewLine
-            $JoinedOutput += "  powershell -ExecutionPolicy Bypass -Command ""& '$($MyInvocation.MyCommand.Path)' -Port $Port -Backend tailscale"""
+
+        $StatusJson = $StatusResult.Stdout | ConvertFrom-Json
+        $DnsName = $StatusJson.Self.DNSName
+        if ([string]::IsNullOrWhiteSpace($DnsName)) {
+            Stop-ExistingProcess -PidFile $ServerPidFile
+            throw "Could not determine the Tailscale DNS name."
         }
-        Stop-ExistingProcess -PidFile $ServerPidFile
-        throw "tailscale status failed: $JoinedOutput"
-    }
 
-    $StatusJson = $StatusResult.Stdout | ConvertFrom-Json
-    $DnsName = $StatusJson.Self.DNSName
-    if ([string]::IsNullOrWhiteSpace($DnsName)) {
-        throw "Could not determine the Tailscale DNS name."
+        $PublicUrl = "https://" + $DnsName.TrimEnd(".")
     }
-
-    $PublicUrl = "https://" + $DnsName.TrimEnd(".")
     $PublicUrl | Set-Content -LiteralPath $UrlFile -Encoding ascii
     "tailscale" | Set-Content -LiteralPath $BackendFile -Encoding ascii
 
     Write-LinkSummary -PublicUrl $PublicUrl -BackendName "tailscale funnel (stable ts.net URL)" -ServerPid "$($ServerProc.Id)"
 
-    $CombinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
-    if ($CombinedOutput) {
+    if ($JoinedOutput) {
         Write-Host ""
         Write-Host "tailscale output:"
-        ($CombinedOutput -split "`r?`n") | ForEach-Object { if ($_ -ne "") { Write-Host "  $_" } }
+        ($JoinedOutput -split "`r?`n") | ForEach-Object { if ($_ -ne "") { Write-Host "  $_" } }
     }
 }
 
