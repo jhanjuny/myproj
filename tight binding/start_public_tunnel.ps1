@@ -155,7 +155,8 @@ function Invoke-NativeCapture {
         [string]$FilePath,
         [string[]]$Arguments,
         [string]$StdoutPath,
-        [string]$StderrPath
+        [string]$StderrPath,
+        [int]$TimeoutSeconds = 20
     )
 
     foreach ($Path in @($StdoutPath, $StderrPath)) {
@@ -168,10 +169,19 @@ function Invoke-NativeCapture {
         -FilePath $FilePath `
         -ArgumentList $Arguments `
         -PassThru `
-        -Wait `
         -WindowStyle Hidden `
         -RedirectStandardOutput $StdoutPath `
         -RedirectStandardError $StderrPath
+
+    $TimedOut = $false
+    if (-not $Proc.WaitForExit($TimeoutSeconds * 1000)) {
+        $TimedOut = $true
+        try {
+            Stop-Process -Id $Proc.Id -Force -ErrorAction Stop
+        } catch {
+        }
+        $Proc.WaitForExit()
+    }
 
     $Stdout = if (Test-Path -LiteralPath $StdoutPath) {
         Get-Content -LiteralPath $StdoutPath -Raw -ErrorAction SilentlyContinue
@@ -186,9 +196,10 @@ function Invoke-NativeCapture {
     }
 
     return [pscustomobject]@{
-        ExitCode = $Proc.ExitCode
+        ExitCode = if ($TimedOut) { -1 } else { $Proc.ExitCode }
         Stdout   = $Stdout
         Stderr   = $Stderr
+        TimedOut = $TimedOut
     }
 }
 
@@ -267,9 +278,12 @@ function Start-TailscaleFunnel {
     } catch {
     }
 
-    $FunnelResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "--bg", "--yes", "http://127.0.0.1:$Port") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
+    $FunnelResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("funnel", "--bg", "--yes", "http://127.0.0.1:$Port") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr -TimeoutSeconds 20
     if ($FunnelResult.ExitCode -ne 0) {
         $JoinedOutput = (($FunnelResult.Stdout + [Environment]::NewLine + $FunnelResult.Stderr).Trim())
+        if ($FunnelResult.TimedOut) {
+            $JoinedOutput = ("tailscale funnel timed out after 20 seconds." + [Environment]::NewLine + $JoinedOutput).Trim()
+        }
         if ($JoinedOutput -match "Access is denied") {
             $JoinedOutput += [Environment]::NewLine
             $JoinedOutput += "Tailscale LocalAPI access was denied from this shell."
@@ -284,9 +298,12 @@ function Start-TailscaleFunnel {
 
     Start-Sleep -Seconds 2
 
-    $StatusResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("status", "--json") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr
+    $StatusResult = Invoke-NativeCapture -FilePath $TailscaleExe -Arguments @("status", "--json") -StdoutPath $TailscaleStdout -StderrPath $TailscaleStderr -TimeoutSeconds 12
     if ($StatusResult.ExitCode -ne 0) {
         $JoinedOutput = (($StatusResult.Stdout + [Environment]::NewLine + $StatusResult.Stderr).Trim())
+        if ($StatusResult.TimedOut) {
+            $JoinedOutput = ("tailscale status timed out after 12 seconds." + [Environment]::NewLine + $JoinedOutput).Trim()
+        }
         if ($JoinedOutput -match "Access is denied") {
             $JoinedOutput += [Environment]::NewLine
             $JoinedOutput += "Tailscale LocalAPI access was denied from this shell."
