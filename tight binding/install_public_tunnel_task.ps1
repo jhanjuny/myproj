@@ -7,6 +7,7 @@ param(
     [string]$Backend = "auto",
     [string]$StartScriptPath = "",
     [string]$EnsureScriptPath = "",
+    [string]$StateDir = "",
     [switch]$RunWithHighest
 )
 
@@ -20,6 +21,10 @@ if ([string]::IsNullOrWhiteSpace($EnsureScriptPath)) {
     $EnsureScriptPath = Join-Path $PSScriptRoot "ensure_public_tunnel.ps1"
 }
 
+if ([string]::IsNullOrWhiteSpace($StateDir)) {
+    $StateDir = Join-Path $env:TEMP "tight_binding_public"
+}
+
 if (-not (Test-Path -LiteralPath $StartScriptPath)) {
     throw "Start script not found: $StartScriptPath"
 }
@@ -27,26 +32,48 @@ if (-not (Test-Path -LiteralPath $EnsureScriptPath)) {
     throw "Ensure script not found: $EnsureScriptPath"
 }
 
-$UserId = if ($env:USERDOMAIN) { "$($env:USERDOMAIN)\$($env:USERNAME)" } else { $env:USERNAME }
-$QuotedScript = "'" + $StartScriptPath.Replace("'", "''") + "'"
-$Arguments = "-ExecutionPolicy Bypass -Command ""& $QuotedScript -Port $Port -Backend $Backend"""
-$QuotedEnsureScript = "'" + $EnsureScriptPath.Replace("'", "''") + "'"
-$WatchdogArguments = "-ExecutionPolicy Bypass -Command ""& $QuotedEnsureScript -Port $Port -Backend $Backend"""
+New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 
-$Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $Arguments
+function Write-Launcher {
+    param(
+        [string]$LauncherPath,
+        [string]$ScriptPath
+    )
+
+    $Content = @(
+        "@echo off",
+        "powershell.exe -ExecutionPolicy Bypass -File `"$ScriptPath`" -Port $Port -Backend $Backend"
+    )
+    Set-Content -LiteralPath $LauncherPath -Value $Content -Encoding ascii
+}
+
+$CurrentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+$UserId = if ([string]::IsNullOrWhiteSpace($CurrentIdentity)) { $env:USERNAME } else { $CurrentIdentity }
+
+$StartLauncherPath = Join-Path $StateDir "start_public_tunnel_launcher.cmd"
+$EnsureLauncherPath = Join-Path $StateDir "ensure_public_tunnel_launcher.cmd"
+Write-Launcher -LauncherPath $StartLauncherPath -ScriptPath $StartScriptPath
+Write-Launcher -LauncherPath $EnsureLauncherPath -ScriptPath $EnsureScriptPath
+
+$Action = New-ScheduledTaskAction -Execute $StartLauncherPath
 $Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $RunLevel = if ($RunWithHighest) { "Highest" } else { "Limited" }
-$Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType Interactive -RunLevel $RunLevel
+$Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType InteractiveToken -RunLevel $RunLevel
 
-Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $Action `
-    -Trigger $Trigger `
-    -Settings $Settings `
-    -Principal $Principal `
-    -Description "Auto-start the tight binding public tunnel on user logon." `
-    -Force | Out-Null
+try {
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $Action `
+        -Trigger $Trigger `
+        -Settings $Settings `
+        -Principal $Principal `
+        -Description "Auto-start the tight binding public tunnel on user logon." `
+        -Force `
+        -ErrorAction Stop | Out-Null
+} catch {
+    throw "Failed to register logon task '$TaskName': $($_.Exception.Message)"
+}
 
 Write-Host "Scheduled task registered."
 Write-Host "task name:   $TaskName"
@@ -54,7 +81,7 @@ Write-Host "user:        $UserId"
 Write-Host "trigger:     AtLogOn"
 Write-Host "run level:   $RunLevel"
 Write-Host "script:      $StartScriptPath"
-Write-Host "arguments:   -Port $Port -Backend $Backend"
+Write-Host "launcher:    $StartLauncherPath"
 Write-Host ""
 
 $WatchdogCreateArgs = @(
@@ -62,18 +89,22 @@ $WatchdogCreateArgs = @(
     "/TN", $WatchdogTaskName,
     "/SC", "MINUTE",
     "/MO", "$WatchdogMinutes",
-    "/TR", "powershell.exe $WatchdogArguments",
+    "/TR", $EnsureLauncherPath,
     "/F"
 )
 if ($RunWithHighest) {
     $WatchdogCreateArgs += @("/RL", "HIGHEST")
 }
-& schtasks.exe @WatchdogCreateArgs | Out-Null
+$null = & schtasks.exe @WatchdogCreateArgs
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to register watchdog task '$WatchdogTaskName' via schtasks.exe."
+}
 
 Write-Host "Watchdog task registered."
 Write-Host "watchdog:    $WatchdogTaskName"
 Write-Host "interval:    every $WatchdogMinutes minute(s)"
 Write-Host "ensure:      $EnsureScriptPath"
+Write-Host "launcher:    $EnsureLauncherPath"
 Write-Host ""
 Write-Host "To test it now:"
 Write-Host "  Start-ScheduledTask -TaskName '$TaskName'"
