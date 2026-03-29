@@ -47,37 +47,29 @@ function Write-Launcher {
     Set-Content -LiteralPath $LauncherPath -Value $Content -Encoding ascii
 }
 
-$CurrentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$UserId = if ([string]::IsNullOrWhiteSpace($CurrentIdentity)) { $env:USERNAME } else { $CurrentIdentity }
-
 $StartLauncherPath = Join-Path $StateDir "start_public_tunnel_launcher.cmd"
 $EnsureLauncherPath = Join-Path $StateDir "ensure_public_tunnel_launcher.cmd"
 Write-Launcher -LauncherPath $StartLauncherPath -ScriptPath $StartScriptPath
 Write-Launcher -LauncherPath $EnsureLauncherPath -ScriptPath $EnsureScriptPath
 
-$Action = New-ScheduledTaskAction -Execute $StartLauncherPath
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
-$Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
 $RunLevel = if ($RunWithHighest) { "Highest" } else { "Limited" }
-$Principal = New-ScheduledTaskPrincipal -UserId $UserId -LogonType InteractiveToken -RunLevel $RunLevel
+$RunLevelValue = if ($RunWithHighest) { "HIGHEST" } else { "LIMITED" }
 
-try {
-    Register-ScheduledTask `
-        -TaskName $TaskName `
-        -Action $Action `
-        -Trigger $Trigger `
-        -Settings $Settings `
-        -Principal $Principal `
-        -Description "Auto-start the tight binding public tunnel on user logon." `
-        -Force `
-        -ErrorAction Stop | Out-Null
-} catch {
-    throw "Failed to register logon task '$TaskName': $($_.Exception.Message)"
+$StartCreateArgs = @(
+    "/Create",
+    "/TN", $TaskName,
+    "/SC", "ONLOGON",
+    "/TR", $StartLauncherPath,
+    "/RL", $RunLevelValue,
+    "/F"
+)
+$StartOutput = & schtasks.exe @StartCreateArgs 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "Failed to register logon task '$TaskName':`n$($StartOutput -join [Environment]::NewLine)"
 }
 
 Write-Host "Scheduled task registered."
 Write-Host "task name:   $TaskName"
-Write-Host "user:        $UserId"
 Write-Host "trigger:     AtLogOn"
 Write-Host "run level:   $RunLevel"
 Write-Host "script:      $StartScriptPath"
@@ -94,10 +86,12 @@ $WatchdogCreateArgs = @(
 )
 if ($RunWithHighest) {
     $WatchdogCreateArgs += @("/RL", "HIGHEST")
+} else {
+    $WatchdogCreateArgs += @("/RL", "LIMITED")
 }
-$null = & schtasks.exe @WatchdogCreateArgs
+$WatchdogOutput = & schtasks.exe @WatchdogCreateArgs 2>&1
 if ($LASTEXITCODE -ne 0) {
-    throw "Failed to register watchdog task '$WatchdogTaskName' via schtasks.exe."
+    throw "Failed to register watchdog task '$WatchdogTaskName':`n$($WatchdogOutput -join [Environment]::NewLine)"
 }
 
 Write-Host "Watchdog task registered."

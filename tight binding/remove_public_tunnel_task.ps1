@@ -10,18 +10,22 @@ if ([string]::IsNullOrWhiteSpace($StateDir)) {
     $StateDir = Join-Path $env:TEMP "tight_binding_public"
 }
 
-try {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
-    Write-Host "Scheduled task removed: $TaskName"
-} catch {
-    Write-Host "Scheduled task not found or could not be removed: $TaskName"
-}
+foreach ($CurrentTaskName in @($TaskName, $WatchdogTaskName)) {
+    $QueryOutput = & schtasks.exe /Query /TN $CurrentTaskName 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Scheduled task not found or could not be removed: $CurrentTaskName"
+        continue
+    }
 
-try {
-    & schtasks.exe /Delete /TN $WatchdogTaskName /F | Out-Null
-    Write-Host "Scheduled task removed: $WatchdogTaskName"
-} catch {
-    Write-Host "Scheduled task not found or could not be removed: $WatchdogTaskName"
+    $DeleteOutput = & schtasks.exe /Delete /TN $CurrentTaskName /F 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "Scheduled task removed: $CurrentTaskName"
+    } else {
+        Write-Host "Scheduled task not found or could not be removed: $CurrentTaskName"
+        if ($DeleteOutput) {
+            Write-Host ($DeleteOutput -join [Environment]::NewLine)
+        }
+    }
 }
 
 foreach ($LauncherName in @("start_public_tunnel_launcher.cmd", "ensure_public_tunnel_launcher.cmd")) {
