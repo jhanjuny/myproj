@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 a = Analysis(
-    ['apps/rheed_monitor/main.py'],
+    ['apps/rheed_monitor/setup_wizard.py'],
     pathex=['.'],
     binaries=[],
     datas=[
@@ -8,12 +8,8 @@ a = Analysis(
     ],
     hiddenimports=[
         'apps.rheed_monitor.capture.hikrobot',
-        'apps.rheed_monitor.detection.spot_detector',
-        'apps.rheed_monitor.gui.main_window',
-        'apps.rheed_monitor.storage.session',
         'PyQt5.QtCore', 'PyQt5.QtWidgets', 'PyQt5.QtGui',
-        'matplotlib.backends.backend_qt5agg',
-        'cv2', 'yaml',
+        'yaml',
     ],
     hookspath=[],
     runtime_hooks=[],
@@ -23,7 +19,7 @@ a = Analysis(
 pyz = PYZ(a.pure)
 exe = EXE(
     pyz, a.scripts, a.binaries, a.datas, [],
-    name='RheedMonitor',
+    name='RheedSetup',
     debug=False,
     strip=False,
     upx=True,
