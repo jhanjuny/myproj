@@ -194,65 +194,118 @@ def _build_file_info(content: ProcessedContent) -> str:
 def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> str:
     """
     Run claude CLI and return text output.
-    Tries three strategies in order so long prompts always work:
-      1. stdin pipe  →  claude -p -   (no arg-length limit)
-      2. cmd.exe stdin redirect  →  claude -p -  < prompt.txt
-      3. direct arg  →  claude -p <truncated>  (last resort)
+
+    Root problem on Windows:
+      • npm-installed claude is a .CMD wrapper → goes through cmd.exe → 8 192-char limit
+      • `claude -p -` (stdin sentinel) is NOT reliably supported by Claude Code CLI
+
+    Strategy order (file-based approaches are the only ones that bypass arg limits):
+      1. Native .EXE only — direct stdin PIPE to `claude --print`
+      2. cmd.exe file redirect:  claude --print < prompt.txt
+      3. cmd.exe type-pipe:      type prompt.txt | claude --print
+      4. PowerShell pipe:        Get-Content … | claude --print
+      5. Last resort: truncate prompt to cmd-safe length and pass as -p arg
     """
     prompt_bytes = prompt.encode("utf-8")
+    is_cmd_script = claude_exe.lower().endswith((".cmd", ".bat"))
 
-    # ── Strategy 1: pipe prompt bytes via stdin ───────────────────────────────
-    try:
-        proc = subprocess.Popen(
-            [claude_exe, "-p", "-"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
-        stdout_bytes, stderr_bytes = proc.communicate(
-            input=prompt_bytes, timeout=timeout
-        )
-        output = _decode_output(stdout_bytes)
-        if output:
-            return output
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-    # ── Strategy 2: cmd.exe stdin redirect (< file) ───────────────────────────
     with tempfile.TemporaryDirectory() as tmpdir:
         prompt_path = os.path.join(tmpdir, "prompt.txt")
         with open(prompt_path, "wb") as f:
             f.write(prompt_bytes)
 
-        cmd_line = f'chcp 65001 > nul 2>&1 && "{claude_exe}" -p - < "{prompt_path}"'
-        try:
-            result = subprocess.run(
-                ["cmd.exe", "/c", cmd_line],
-                capture_output=True,
-                env=env,
-                timeout=timeout,
+        # ── Strategy 1: stdin PIPE (native .EXE only) ────────────────────────
+        if not is_cmd_script:
+            for print_flag in (["--print"], ["-p", "--"]):
+                try:
+                    proc = subprocess.Popen(
+                        [claude_exe] + print_flag,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=env,
+                    )
+                    stdout_b, _ = proc.communicate(input=prompt_bytes, timeout=timeout)
+                    out = _decode_output(stdout_b)
+                    if out:
+                        return out
+                except (OSError, subprocess.SubprocessError, ValueError):
+                    continue
+
+        # ── Strategy 2: cmd.exe file redirect  < prompt.txt ──────────────────
+        q = claude_exe.replace('"', '""')
+        p = prompt_path.replace('"', '""')
+
+        for print_arg in ("--print", "-p -"):
+            cmd = f'chcp 65001 > nul 2>&1 && "{q}" {print_arg} < "{p}"'
+            try:
+                r = subprocess.run(
+                    ["cmd.exe", "/c", cmd],
+                    capture_output=True, env=env, timeout=timeout,
+                )
+                out = _decode_output(r.stdout)
+                if out:
+                    return out
+            except (OSError, subprocess.SubprocessError):
+                continue
+
+        # ── Strategy 3: cmd.exe type-pipe  type prompt.txt | claude --print ──
+        for print_arg in ("--print", "-p -"):
+            cmd = f'chcp 65001 > nul 2>&1 && type "{p}" | "{q}" {print_arg}'
+            try:
+                r = subprocess.run(
+                    ["cmd.exe", "/c", cmd],
+                    capture_output=True, env=env, timeout=timeout,
+                )
+                out = _decode_output(r.stdout)
+                if out:
+                    return out
+            except (OSError, subprocess.SubprocessError):
+                continue
+
+        # ── Strategy 4: PowerShell pipe ───────────────────────────────────────
+        for print_arg in ("--print", "-p -"):
+            ps = (
+                f'$env:PYTHONIOENCODING="utf-8"; '
+                f'Get-Content -Raw -Encoding UTF8 "{p}" | & "{q}" {print_arg}'
             )
-            output = _decode_output(result.stdout)
-            if output:
-                return output
-        except (OSError, subprocess.SubprocessError):
-            pass
+            try:
+                r = subprocess.run(
+                    ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps],
+                    capture_output=True, env=env, timeout=timeout,
+                )
+                out = _decode_output(r.stdout)
+                if out:
+                    return out
+            except (OSError, subprocess.SubprocessError):
+                continue
 
-    # ── Strategy 3: direct -p arg (truncated to 20 000 chars) ────────────────
-    truncated = prompt[:20000]
-    result = subprocess.run(
-        [claude_exe, "-p", truncated],
-        capture_output=True,
-        env=env,
-        timeout=timeout,
-    )
-    output = _decode_output(result.stdout)
-    if output:
-        return output
-
-    err = _decode_output(result.stderr) or "(오류 정보 없음)"
-    raise RuntimeError(f"Claude CLI 오류:\n{err}")
+    # ── Strategy 5: last resort — truncate to cmd-safe size (~5 000 chars) ───
+    # cmd.exe limit ≈ 8 192; subtract exe path + flags overhead
+    truncated = prompt[:5000]
+    try:
+        if is_cmd_script:
+            safe = truncated.replace('"', ' ')   # drop quotes to avoid quoting hell
+            r = subprocess.run(
+                ["cmd.exe", "/c", f'chcp 65001 > nul 2>&1 && "{claude_exe}" -p "{safe}"'],
+                capture_output=True, env=env, timeout=timeout,
+            )
+        else:
+            r = subprocess.run(
+                [claude_exe, "-p", truncated],
+                capture_output=True, env=env, timeout=timeout,
+            )
+        out = _decode_output(r.stdout)
+        if out:
+            return out
+        err = _decode_output(r.stderr) or "(오류 정보 없음)"
+        raise RuntimeError(f"Claude CLI 오류:\n{err}")
+    except subprocess.TimeoutExpired:
+        raise
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(f"Claude CLI 실행 실패: {exc}") from exc
 
 
 def _sanitize(text: str) -> str:
@@ -371,14 +424,23 @@ def validate_api_key(key: str) -> bool:
 
 
 def validate_cli() -> bool:
+    """Return True if the claude CLI is reachable and responds to --version."""
     path = _find_claude_cli()
     if not path:
         return False
+    is_cmd = path.lower().endswith((".cmd", ".bat"))
     try:
-        result = subprocess.run(
-            [path, "--version"],
-            capture_output=True, text=True, timeout=10,
-        )
+        if is_cmd:
+            # .CMD wrappers must go through cmd.exe
+            result = subprocess.run(
+                ["cmd.exe", "/c", f'"{path}" --version'],
+                capture_output=True, timeout=15,
+            )
+        else:
+            result = subprocess.run(
+                [path, "--version"],
+                capture_output=True, timeout=15,
+            )
         return result.returncode == 0
     except Exception:
         return False
