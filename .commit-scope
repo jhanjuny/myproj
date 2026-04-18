@@ -1,3 +1,4 @@
 # Allowed commit paths for the local pre-commit guard.
 # One path prefix per line.
 tight binding/
+study_notes_app/
