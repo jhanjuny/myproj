@@ -12,7 +12,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from src.processors.dispatcher import dispatch_multiple, merge_contents
 from src.processors.base import ProcessorError
-from src.ai.client import ClaudeClient
+from src.ai.client import ClaudeClient, load_use_cli
 from src.storage import database as db
 
 
@@ -34,14 +34,16 @@ class NoteGeneratorThread(QThread):
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str | None,
         file_paths: list[Path],
         subject_id: int | None = None,
         chapter_id: int | None = None,
+        use_cli: bool = False,
         parent=None,
     ):
         super().__init__(parent)
         self._api_key = api_key
+        self._use_cli = use_cli
         self._file_paths = file_paths
         self._subject_id = subject_id
         self._chapter_id = chapter_id
@@ -79,7 +81,7 @@ class NoteGeneratorThread(QThread):
         # ── Step 3: Stream note from Claude ───────────────────────────────────
         self.progress.emit("🤖 AI 노트 생성 중 (스트리밍)...")
 
-        client = ClaudeClient(self._api_key)
+        client = ClaudeClient(api_key=self._api_key, use_cli=self._use_cli)
         self._note_buffer = ""
 
         try:

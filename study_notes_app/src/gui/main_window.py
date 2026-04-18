@@ -30,7 +30,10 @@ from src.gui.widgets.note_editor import NoteEditorPanel
 from src.gui.widgets.sidebar import SidebarWidget
 from src.gui.widgets.upload_panel import UploadPanel
 from src.gui.widgets.processing_dialog import ProcessingDialog
-from src.ai.client import ClaudeClient, load_api_key, save_api_key, validate_api_key
+from src.ai.client import (
+    ClaudeClient, load_api_key, load_use_cli,
+    save_api_key, save_use_cli, validate_api_key, validate_cli,
+)
 from src.ai.note_generator import NoteGeneratorThread
 from src.storage import database as db
 
@@ -47,6 +50,7 @@ class MainWindow(QMainWindow):
 
         self._current_note_id: int | None = None
         self._api_key: str | None = load_api_key()
+        self._use_cli: bool = load_use_cli()
         self._generator_thread: NoteGeneratorThread | None = None
         self._processing_dialog: ProcessingDialog | None = None
 
@@ -54,7 +58,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._bind_shortcuts()
 
-        if not self._api_key:
+        if not self._use_cli and not self._api_key:
             self._prompt_api_key()
 
     # ── UI construction ───────────────────────────────────────────────────────
@@ -136,7 +140,7 @@ class MainWindow(QMainWindow):
 
         clear_act = QAction("✖", self)
         clear_act.setToolTip("하이라이트 모두 지우기")
-        clear_act.triggered.connect(self._viewer.clear_highlights)
+        clear_act.triggered.connect(lambda: self._viewer.clear_highlights())
         tb.addAction(clear_act)
 
         tb.addSeparator()
@@ -200,9 +204,9 @@ class MainWindow(QMainWindow):
     def _on_generate_requested(
         self, file_paths: list, subject_id, chapter_id
     ):
-        if not self._api_key:
+        if not self._use_cli and not self._api_key:
             self._prompt_api_key()
-            if not self._api_key:
+            if not self._use_cli and not self._api_key:
                 return
 
         if not file_paths:
@@ -217,6 +221,7 @@ class MainWindow(QMainWindow):
             file_paths=[Path(p) for p in file_paths],
             subject_id=subject_id,
             chapter_id=chapter_id,
+            use_cli=self._use_cli,
             parent=self,
         )
         self._generator_thread.progress.connect(self._processing_dialog.set_status)
@@ -298,56 +303,179 @@ class MainWindow(QMainWindow):
     # ── Settings ──────────────────────────────────────────────────────────────
 
     def _open_settings(self):
-        from PyQt5.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+        from PyQt5.QtWidgets import (
+            QDialog, QFormLayout, QDialogButtonBox, QRadioButton,
+            QGroupBox, QVBoxLayout,
+        )
+        from PyQt5.QtCore import Qt
+
         dlg = QDialog(self)
-        dlg.setWindowTitle("설정")
-        dlg.setFixedWidth(440)
+        dlg.setWindowTitle("⚙️  설정 — AI 연결")
+        dlg.setFixedWidth(480)
         dlg.setStyleSheet(DARK_QSS)
 
-        form = QFormLayout(dlg)
+        outer = QVBoxLayout(dlg)
 
+        # ── Auth mode ──────────────────────────────────────────────────────────
+        mode_box = QGroupBox("AI 연결 방식")
+        mode_box.setStyleSheet("QGroupBox { font-weight: bold; }")
+        mode_layout = QVBoxLayout(mode_box)
+
+        rb_cli = QRadioButton(
+            "🏢  팀/Pro 계정 (Claude Code CLI)  —  API 키 불필요\n"
+            "    Claude Code가 설치되어 있으면 자동으로 인증됩니다."
+        )
+        rb_api = QRadioButton(
+            "🔑  Anthropic API 키  —  console.anthropic.com에서 발급"
+        )
+        rb_cli.setChecked(self._use_cli)
+        rb_api.setChecked(not self._use_cli)
+
+        mode_layout.addWidget(rb_cli)
+        mode_layout.addWidget(rb_api)
+        outer.addWidget(mode_box)
+
+        # ── API key field (only relevant when rb_api) ─────────────────────────
+        form = QFormLayout()
         key_edit = QLineEdit(self._api_key or "")
         key_edit.setEchoMode(QLineEdit.Password)
         key_edit.setPlaceholderText("sk-ant-…")
-        form.addRow("Claude API 키:", key_edit)
+        key_edit.setEnabled(not self._use_cli)
+        form.addRow("API 키:", key_edit)
+        outer.addLayout(form)
 
+        rb_cli.toggled.connect(lambda checked: key_edit.setDisabled(checked))
+
+        # ── Buttons ────────────────────────────────────────────────────────────
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
+        outer.addWidget(btns)
 
-        if dlg.exec_():
+        if not dlg.exec_():
+            return
+
+        use_cli = rb_cli.isChecked()
+
+        if use_cli:
+            self._status_label.setText("🔍  Claude Code CLI 확인 중...")
+            if validate_cli():
+                self._use_cli = True
+                save_use_cli(True)
+                self._update_api_status_indicator()
+                self._status_label.setText("✅  팀 계정 CLI 연결 확인됨")
+            else:
+                QMessageBox.warning(
+                    self, "오류",
+                    "claude CLI를 찾을 수 없습니다.\n\n"
+                    "Claude Code가 설치되어 있는지 확인하세요.\n"
+                    "터미널에서 'claude --version' 이 실행되어야 합니다."
+                )
+        else:
             new_key = key_edit.text().strip()
             if new_key:
                 self._status_label.setText("🔑  API 키 확인 중...")
                 if validate_api_key(new_key):
                     self._api_key = new_key
+                    self._use_cli = False
                     save_api_key(new_key)
+                    save_use_cli(False)
                     self._update_api_status_indicator()
-                    self._status_label.setText("✅  API 키가 저장되었습니다")
+                    self._status_label.setText("✅  API 키 저장됨")
                 else:
                     QMessageBox.warning(self, "오류", "API 키가 유효하지 않습니다.")
                     self._status_label.setText("❌  API 키 오류")
 
     def _prompt_api_key(self):
-        key, ok = QInputDialog.getText(
-            self,
-            "Claude API 키 설정",
-            "Anthropic API 키를 입력하세요 (https://console.anthropic.com):",
-            QLineEdit.Password,
+        """First-run setup dialog — detects CLI automatically."""
+        from PyQt5.QtWidgets import (
+            QDialog, QVBoxLayout, QDialogButtonBox, QRadioButton,
+            QGroupBox, QFormLayout,
         )
-        if ok and key.strip():
-            if validate_api_key(key.strip()):
-                self._api_key = key.strip()
-                save_api_key(self._api_key)
-                self._update_api_status_indicator()
-            else:
-                QMessageBox.warning(self, "오류", "유효하지 않은 API 키입니다.")
+
+        cli_available = validate_cli()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("StudyNotes AI — 첫 실행 설정")
+        dlg.setFixedWidth(500)
+        dlg.setStyleSheet(DARK_QSS)
+
+        outer = QVBoxLayout(dlg)
+
+        info = QLabel(
+            "Claude AI 연결 방식을 선택하세요.\n"
+            "언제든지 ⚙️ 설정에서 변경할 수 있습니다."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("color: #a9b1d6; padding-bottom: 8px;")
+        outer.addWidget(info)
+
+        mode_box = QGroupBox("연결 방식")
+        mode_layout = QVBoxLayout(mode_box)
+
+        cli_label = (
+            "🏢  팀/Pro 계정 (Claude Code CLI)  ✅ 감지됨\n"
+            "    API 키 불필요 — 현재 로그인된 계정 그대로 사용"
+            if cli_available else
+            "🏢  팀/Pro 계정 (Claude Code CLI)  ⚠️ 미감지\n"
+            "    Claude Code가 설치되어 있어야 합니다"
+        )
+        rb_cli = QRadioButton(cli_label)
+        rb_api = QRadioButton(
+            "🔑  Anthropic API 키\n"
+            "    console.anthropic.com에서 발급한 키 입력"
+        )
+
+        # Default: CLI if available, else API key
+        rb_cli.setChecked(cli_available)
+        rb_api.setChecked(not cli_available)
+        rb_cli.setEnabled(cli_available)
+
+        mode_layout.addWidget(rb_cli)
+        mode_layout.addWidget(rb_api)
+        outer.addWidget(mode_box)
+
+        form = QFormLayout()
+        key_edit = QLineEdit()
+        key_edit.setEchoMode(QLineEdit.Password)
+        key_edit.setPlaceholderText("sk-ant-…")
+        key_edit.setEnabled(not cli_available)
+        form.addRow("API 키:", key_edit)
+        outer.addLayout(form)
+
+        rb_cli.toggled.connect(lambda checked: key_edit.setDisabled(checked))
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        outer.addWidget(btns)
+
+        if not dlg.exec_():
+            return
+
+        if rb_cli.isChecked():
+            self._use_cli = True
+            save_use_cli(True)
+            self._update_api_status_indicator()
+        else:
+            key = key_edit.text().strip()
+            if key:
+                if validate_api_key(key):
+                    self._api_key = key
+                    self._use_cli = False
+                    save_api_key(key)
+                    save_use_cli(False)
+                    self._update_api_status_indicator()
+                else:
+                    QMessageBox.warning(self, "오류", "유효하지 않은 API 키입니다.")
 
     def _update_api_status_indicator(self):
-        if self._api_key:
+        if self._use_cli:
+            self._api_status.setText("🟢  팀 계정 (CLI)")
+            self._api_status.setStyleSheet("color: #9ece6a;")
+        elif self._api_key:
             self._api_status.setText("🟢  API 연결됨")
             self._api_status.setStyleSheet("color: #9ece6a;")
         else:
-            self._api_status.setText("🔴  API 키 없음")
+            self._api_status.setText("🔴  연결 안 됨  (⚙️ 설정)")
             self._api_status.setStyleSheet("color: #f7768e;")

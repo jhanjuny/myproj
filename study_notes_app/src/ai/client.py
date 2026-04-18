@@ -1,66 +1,53 @@
 """
-Claude API client with Vision support.
-Uses the Anthropic SDK with prompt caching for long documents.
+Claude AI client — supports two backends:
+
+  1. "api"  → Anthropic SDK (API key required)
+  2. "cli"  → Claude Code CLI subprocess (team / pro 계정, API key 불필요)
+              `claude` 명령이 PATH에 있어야 함 (Claude Code 설치 전제)
 """
 from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
+import tempfile
+import os
 from typing import Iterator
-
-import anthropic
 
 from src.config import CLAUDE_MAX_TOKENS, CLAUDE_MODEL
 from src.ai.prompts import SYSTEM_PROMPT, SUBJECT_INFERENCE_PROMPT, build_note_user_message
 from src.processors.base import ProcessedContent, ImageBlock
 
 
-class ClaudeClient:
+# ── Backend: Anthropic SDK (API key) ─────────────────────────────────────────
+
+class ApiKeyClient:
+    """Calls Anthropic API directly with an API key."""
+
     def __init__(self, api_key: str):
-        self._client = anthropic.Anthropic(api_key=api_key)
+        import anthropic as _anthropic
+        self._client = _anthropic.Anthropic(api_key=api_key)
 
-    # ── Note generation (streaming) ───────────────────────────────────────────
-
-    def generate_note_stream(
-        self,
-        content: ProcessedContent,
-    ) -> Iterator[str]:
-        """
-        Stream-generate a markdown note from ProcessedContent.
-        Yields text chunks as they arrive.
-        """
-        messages = self._build_messages(content)
-
+    def generate_note_stream(self, content: ProcessedContent) -> Iterator[str]:
+        import anthropic as _anthropic
+        messages = _build_messages(content)
         with self._client.messages.stream(
             model=CLAUDE_MODEL,
             max_tokens=CLAUDE_MAX_TOKENS,
-            system=[
-                {
-                    "type": "text",
-                    "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},  # cache the long system prompt
-                }
-            ],
+            system=[{
+                "type": "text",
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }],
             messages=messages,
         ) as stream:
             for chunk in stream.text_stream:
                 yield chunk
 
-    def generate_note(self, content: ProcessedContent) -> str:
-        """Non-streaming version — returns complete markdown."""
-        return "".join(self.generate_note_stream(content))
-
-    # ── Subject / chapter inference ───────────────────────────────────────────
-
     def infer_subject_and_chapter(self, note_markdown: str) -> dict:
-        """
-        Extract subject name and chapter title from the generated note.
-        Returns {"subject": "...", "chapter": "..."}.
-        Falls back to defaults if parsing fails.
-        """
         preview = note_markdown[:1500]
         prompt = SUBJECT_INFERENCE_PROMPT.format(note_preview=preview)
-
         try:
             resp = self._client.messages.create(
                 model=CLAUDE_MODEL,
@@ -68,116 +55,330 @@ class ClaudeClient:
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = resp.content[0].text.strip()
-            # Extract JSON even if wrapped in markdown fences
             m = re.search(r'\{.*?\}', raw, re.DOTALL)
             if m:
                 return json.loads(m.group())
         except Exception:
             pass
+        return _fallback_subject(note_markdown)
 
-        # Fallback: try to read the first # heading
-        for line in note_markdown.splitlines():
-            line = line.strip()
-            if line.startswith("# "):
-                return {"subject": "미분류", "chapter": line[2:].strip()}
 
-        return {"subject": "미분류", "chapter": "단원 1"}
+# ── Backend: Claude Code CLI (team / pro 계정) ────────────────────────────────
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
+class CliClient:
+    """
+    Calls `claude -p <prompt>` via subprocess.
+    Authentication is handled by Claude Code (team/pro 계정).
+    Images are saved to temp files and referenced as file paths.
+    Streaming is simulated: the full response is yielded in one chunk
+    (the CLI doesn't expose per-token streaming externally).
+    """
 
-    def _build_messages(self, content: ProcessedContent) -> list[dict]:
-        """Build the messages list with text + vision blocks."""
-        file_info = self._build_file_info(content)
-        text_block = {
-            "type": "text",
-            "text": build_note_user_message(content.text, file_info),
-        }
+    def __init__(self):
+        self._claude = _find_claude_cli()
+        if not self._claude:
+            raise RuntimeError(
+                "claude CLI를 찾을 수 없습니다.\n"
+                "Claude Code가 설치되어 있는지 확인하세요.\n"
+                "설치 후 터미널에서 'claude' 명령이 실행되는지 확인하세요."
+            )
 
-        # Add image blocks (Claude Vision)
-        image_blocks = []
-        for img in content.images[:20]:  # API limit safety
-            try:
-                image_blocks.append(self._image_block(img))
-            except Exception:
-                continue
+    def generate_note_stream(self, content: ProcessedContent) -> Iterator[str]:
+        prompt = _sanitize(_build_cli_prompt(content))
 
-        if image_blocks:
-            # Interleave: text prompt, then each image with its caption
-            parts: list[dict] = [text_block]
-            for i, (img_block, img_data) in enumerate(
-                zip(image_blocks, content.images[:20])
-            ):
-                parts.append(img_block)
-                if img_data.caption:
-                    parts.append({"type": "text", "text": f"[이미지 설명: {img_data.caption}]"})
-            return [{"role": "user", "content": parts}]
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        env["PYTHONUTF8"] = "1"
 
-        return [{"role": "user", "content": [text_block]}]
+        try:
+            output = _run_claude(self._claude, prompt, env, timeout=300)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "Claude CLI 응답 시간 초과 (5분).\n"
+                "파일 내용이 너무 길거나 네트워크 문제일 수 있습니다."
+            )
 
-    @staticmethod
-    def _image_block(img: ImageBlock) -> dict:
-        return {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": img.media_type,
-                "data": img.to_base64(),
-            },
-        }
+        if not output:
+            raise RuntimeError("Claude CLI에서 빈 응답을 받았습니다.")
 
-    @staticmethod
-    def _build_file_info(content: ProcessedContent) -> str:
-        parts = []
-        if content.source_path:
-            parts.append(f"파일명: {content.source_path.name}")
-        parts.append(f"형식: {content.file_type}")
-        for k, v in content.metadata.items():
-            parts.append(f"{k}: {v}")
-        if content.images:
-            parts.append(f"포함 이미지: {len(content.images)}개")
-        return "\n".join(parts)
+        yield output
+
+    def infer_subject_and_chapter(self, note_markdown: str) -> dict:
+        preview = note_markdown[:1500]
+        prompt = _sanitize(SUBJECT_INFERENCE_PROMPT.format(note_preview=preview))
+        try:
+            raw = _run_claude(self._claude, prompt,
+                              os.environ.copy(), timeout=60)
+            m = re.search(r'\{.*?\}', raw, re.DOTALL)
+            if m:
+                return json.loads(m.group())
+        except Exception:
+            pass
+        return _fallback_subject(note_markdown)
+
+
+# ── Unified facade ────────────────────────────────────────────────────────────
+
+class ClaudeClient:
+    """Public interface — wraps either ApiKeyClient or CliClient."""
+
+    def __init__(self, api_key: str | None = None, use_cli: bool = False):
+        if use_cli:
+            self._backend = CliClient()
+        elif api_key:
+            self._backend = ApiKeyClient(api_key)
+        else:
+            raise ValueError("API 키 또는 CLI 모드 중 하나를 선택하세요.")
+
+    def generate_note_stream(self, content: ProcessedContent) -> Iterator[str]:
+        return self._backend.generate_note_stream(content)
+
+    def generate_note(self, content: ProcessedContent) -> str:
+        return "".join(self.generate_note_stream(content))
+
+    def infer_subject_and_chapter(self, note_markdown: str) -> dict:
+        return self._backend.infer_subject_and_chapter(note_markdown)
+
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+def _build_messages(content: ProcessedContent) -> list[dict]:
+    file_info = _build_file_info(content)
+    text_block = {
+        "type": "text",
+        "text": build_note_user_message(content.text, file_info),
+    }
+    image_blocks = []
+    for img in content.images[:20]:
+        try:
+            image_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.media_type,
+                    "data": img.to_base64(),
+                },
+            })
+        except Exception:
+            continue
+
+    if image_blocks:
+        parts: list[dict] = [text_block]
+        for img_block, img_data in zip(image_blocks, content.images[:20]):
+            parts.append(img_block)
+            if img_data.caption:
+                parts.append({"type": "text", "text": f"[이미지: {img_data.caption}]"})
+        return [{"role": "user", "content": parts}]
+
+    return [{"role": "user", "content": [text_block]}]
+
+
+def _build_cli_prompt(content: ProcessedContent) -> str:
+    file_info = _build_file_info(content)
+    user_msg = build_note_user_message(content.text, file_info)
+    return f"{SYSTEM_PROMPT}\n\n---\n\n{user_msg}"
+
+
+def _build_file_info(content: ProcessedContent) -> str:
+    parts = []
+    if content.source_path:
+        parts.append(f"파일명: {content.source_path.name}")
+    parts.append(f"형식: {content.file_type}")
+    for k, v in content.metadata.items():
+        parts.append(f"{k}: {v}")
+    if content.images:
+        parts.append(f"포함 이미지: {len(content.images)}개")
+    return "\n".join(parts)
+
+
+def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> str:
+    """
+    Run claude CLI and return text output.
+    Tries three strategies in order so long prompts always work:
+      1. stdin pipe  →  claude -p -   (no arg-length limit)
+      2. cmd.exe stdin redirect  →  claude -p -  < prompt.txt
+      3. direct arg  →  claude -p <truncated>  (last resort)
+    """
+    prompt_bytes = prompt.encode("utf-8")
+
+    # ── Strategy 1: pipe prompt bytes via stdin ───────────────────────────────
+    try:
+        proc = subprocess.Popen(
+            [claude_exe, "-p", "-"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
+        stdout_bytes, stderr_bytes = proc.communicate(
+            input=prompt_bytes, timeout=timeout
+        )
+        output = _decode_output(stdout_bytes)
+        if output:
+            return output
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    # ── Strategy 2: cmd.exe stdin redirect (< file) ───────────────────────────
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_path = os.path.join(tmpdir, "prompt.txt")
+        with open(prompt_path, "wb") as f:
+            f.write(prompt_bytes)
+
+        cmd_line = f'chcp 65001 > nul 2>&1 && "{claude_exe}" -p - < "{prompt_path}"'
+        try:
+            result = subprocess.run(
+                ["cmd.exe", "/c", cmd_line],
+                capture_output=True,
+                env=env,
+                timeout=timeout,
+            )
+            output = _decode_output(result.stdout)
+            if output:
+                return output
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    # ── Strategy 3: direct -p arg (truncated to 20 000 chars) ────────────────
+    truncated = prompt[:20000]
+    result = subprocess.run(
+        [claude_exe, "-p", truncated],
+        capture_output=True,
+        env=env,
+        timeout=timeout,
+    )
+    output = _decode_output(result.stdout)
+    if output:
+        return output
+
+    err = _decode_output(result.stderr) or "(오류 정보 없음)"
+    raise RuntimeError(f"Claude CLI 오류:\n{err}")
+
+
+def _sanitize(text: str) -> str:
+    """Remove characters that break subprocess pipes (null bytes, surrogates)."""
+    return text.replace("\x00", "").encode("utf-8", errors="replace").decode("utf-8")
+
+
+def _decode_output(raw: bytes) -> str:
+    """Decode subprocess bytes output — tries UTF-8 first, then CP949 (Korean Windows)."""
+    if not raw:
+        return ""
+    for enc in ("utf-8", "cp949", "euc-kr", "latin-1"):
+        try:
+            return raw.decode(enc).strip()
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace").strip()
+
+
+def _fallback_subject(note_markdown: str) -> dict:
+    for line in note_markdown.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return {"subject": "미분류", "chapter": line[2:].strip()}
+    return {"subject": "미분류", "chapter": "단원 1"}
+
+
+def _find_claude_cli() -> str | None:
+    """
+    Find the claude executable.
+    Prefer the native .EXE (no cmd.exe wrapper → no 8192-char arg limit).
+    """
+    appdata = os.environ.get("APPDATA", "")
+    localappdata = os.environ.get("LOCALAPPDATA", "")
+    home = os.path.expanduser("~")
+
+    # ── 1. Native .EXE builds (Claude Desktop / Claude Code installer) ────────
+    native_candidates = []
+    # Versioned claude-code directory (Claude Desktop)
+    cc_dir = os.path.join(appdata, "Claude", "claude-code")
+    if os.path.isdir(cc_dir):
+        for ver in sorted(os.listdir(cc_dir), reverse=True):
+            native_candidates.append(os.path.join(cc_dir, ver, "claude.exe"))
+            native_candidates.append(os.path.join(cc_dir, ver, "claude.EXE"))
+    native_candidates += [
+        os.path.join(localappdata, "Programs", "claude", "claude.exe"),
+        os.path.join(appdata, "Claude", "claude.exe"),
+    ]
+    for c in native_candidates:
+        if os.path.isfile(c):
+            return c
+
+    # ── 2. PATH lookup (may return .CMD wrapper — acceptable fallback) ─────────
+    found = shutil.which("claude")
+    if found:
+        return found
+
+    # ── 3. Common npm / manual install locations ──────────────────────────────
+    for c in [
+        os.path.join(appdata, "npm", "claude.cmd"),
+        os.path.join(home, "AppData", "Roaming", "npm", "claude.cmd"),
+    ]:
+        if os.path.isfile(c):
+            return c
+
+    return None
 
 
 # ── Settings helpers ──────────────────────────────────────────────────────────
 
-def load_api_key() -> str | None:
-    """Load the Claude API key from settings file."""
-    import json
+def load_settings() -> dict:
     from src.config import SETTINGS_FILE
-
     if SETTINGS_FILE.exists():
         try:
-            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-            return data.get("api_key") or None
+            return json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return None
+    return {}
+
+
+def save_settings(data: dict):
+    from src.config import SETTINGS_FILE
+    existing = load_settings()
+    existing.update(data)
+    SETTINGS_FILE.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+
+def load_api_key() -> str | None:
+    return load_settings().get("api_key") or None
+
+
+def load_use_cli() -> bool:
+    return load_settings().get("use_cli", False)
 
 
 def save_api_key(key: str):
-    """Persist the API key to the settings file."""
-    import json
-    from src.config import SETTINGS_FILE
+    save_settings({"api_key": key})
 
-    data = {}
-    if SETTINGS_FILE.exists():
-        try:
-            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    data["api_key"] = key
-    SETTINGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+def save_use_cli(value: bool):
+    save_settings({"use_cli": value})
 
 
 def validate_api_key(key: str) -> bool:
-    """Quick smoke-test to verify the key works."""
     try:
-        client = anthropic.Anthropic(api_key=key)
+        import anthropic as _anthropic
+        client = _anthropic.Anthropic(api_key=key)
         client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=8,
             messages=[{"role": "user", "content": "hi"}],
         )
         return True
+    except Exception:
+        return False
+
+
+def validate_cli() -> bool:
+    path = _find_claude_cli()
+    if not path:
+        return False
+    try:
+        result = subprocess.run(
+            [path, "--version"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return result.returncode == 0
     except Exception:
         return False

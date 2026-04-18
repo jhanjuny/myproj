@@ -34,7 +34,7 @@ class PdfProcessor(BaseProcessor):
 
         for page_num, page in enumerate(doc, start=1):
             # ── Text ──────────────────────────────────────────────────────────
-            page_text = page.get_text("text").strip()
+            page_text = page.get_text("text").strip().replace("\x00", "")
             if page_text:
                 text_parts.append(f"[Page {page_num}]\n{page_text}")
 
@@ -80,11 +80,12 @@ class PdfProcessor(BaseProcessor):
                 except Exception:
                     pass
 
+        page_count = len(doc)
         doc.close()
 
         metadata = {
             "title": path.stem,
-            "page_count": len(doc),
+            "page_count": page_count,
         }
 
         content = ProcessedContent(

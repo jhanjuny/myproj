@@ -11,10 +11,19 @@ os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
 
+# QtWebEngineWidgets MUST be imported before QApplication is created.
+# Failing to do so raises "QtWebEngineWidgets must be imported … before
+# a QCoreApplication instance is created".
+try:
+    from PyQt5.QtWebEngineWidgets import QWebEngineView  # noqa: F401
+except ImportError:
+    pass  # handled below with a friendly error
+
 
 def main():
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
+    QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)  # required by WebEngine
 
     app = QApplication(sys.argv)
     app.setApplicationName("StudyNotes AI")
