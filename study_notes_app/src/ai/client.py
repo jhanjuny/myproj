@@ -302,16 +302,19 @@ def _resolve_cmd_to_exe(cmd_path: str) -> str:
     """
     Read a .CMD/.BAT wrapper and extract the native .EXE it delegates to.
     Example:  "C:\\path\\claude.exe" %*  →  returns that .exe path.
-    Falls back to the original cmd_path if parsing fails or the exe is missing.
+
+    Deliberately skips os.path.isfile() because the target may live under a
+    different user's profile (e.g. "C:\\Users\\Hanjun Sim\\AppData\\...") and
+    permission checks may return False even when the file is accessible.
+    The caller's subprocess call will raise FileNotFoundError if the exe is
+    truly missing, which is handled gracefully in _run_claude.
     """
     try:
         with open(cmd_path, encoding="utf-8", errors="replace") as f:
             content = f.read()
         m = re.search(r'"([^"]+\.exe)"', content, re.IGNORECASE)
         if m:
-            exe = m.group(1)
-            if os.path.isfile(exe):
-                return exe
+            return m.group(1)
     except Exception:
         pass
     return cmd_path
@@ -350,6 +353,10 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
     • .CMD wrappers are resolved to the native .EXE they wrap so that
       cmd.exe and its 8 192-char limit are bypassed entirely.
     """
+    home_dir = os.path.expanduser("~")
+    flags = ["--dangerously-skip-permissions", "--no-session-persistence"]
+    original_path = claude_exe  # keep for cmd.exe fallback
+
     # ── Resolve .CMD/.BAT → native .EXE ──────────────────────────────────────
     is_cmd_script = claude_exe.lower().endswith((".cmd", ".bat"))
     if is_cmd_script:
@@ -358,43 +365,82 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
             claude_exe = resolved
             is_cmd_script = False
 
-    # Cap prompt to stay within Windows CreateProcess command-line limit
-    prompt = prompt[:28000]
-
-    home_dir = os.path.expanduser("~")
-    flags = ["-p", "--dangerously-skip-permissions", "--no-session-persistence"]
-
-    # ── Primary: native .EXE — prompt as direct argument ─────────────────────
+    # ── Native .EXE path ─────────────────────────────────────────────────────
     if not is_cmd_script:
+        # Strategy 1: stdin PIPE — no command-line length limit.
+        # --dangerously-skip-permissions suppresses interactive TTY prompts
+        # that would block a subprocess without a terminal.
         try:
-            r = subprocess.run(
-                [claude_exe] + flags + [prompt],
-                capture_output=True,
+            proc = subprocess.Popen(
+                [claude_exe, "-p"] + flags,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 env=env,
-                timeout=timeout,
                 cwd=home_dir,
             )
-            out = _decode_output(r.stdout)
+            out_b, _ = proc.communicate(
+                input=prompt.encode("utf-8"), timeout=timeout
+            )
+            out = _decode_output(out_b)
             if out:
                 return out
-            err = _decode_output(r.stderr) or _decode_output(r.stdout) or "(응답 없음)"
-            raise RuntimeError(f"Claude CLI 오류:\n{err}")
+            # empty output → fall through to CLI-arg strategy
         except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except Exception:
+                pass
             raise RuntimeError(
                 f"Claude CLI 응답 시간 초과 ({timeout // 60}분).\n"
                 "파일 내용이 너무 길거나 네트워크 문제일 수 있습니다."
             )
-        except RuntimeError:
-            raise
-        except Exception as exc:
-            raise RuntimeError(f"Claude CLI 실행 실패: {exc}") from exc
+        except FileNotFoundError:
+            # Resolved exe doesn't exist → fall back to .CMD path
+            is_cmd_script = True
+            claude_exe = original_path
+        except Exception:
+            pass  # stdin failed silently → try CLI-arg below
 
-    # ── Fallback: .CMD wrapper via "call" trick ───────────────────────────────
-    # "call" as a separate token prevents cmd.exe's outer-quote-stripping
-    # that would break paths containing spaces.
+        if not is_cmd_script:
+            # Strategy 2: CLI argument.
+            # Cap at 25 000 raw chars; list2cmdline escaping adds overhead but
+            # stays comfortably under the 32 767-char CreateProcess limit for
+            # typical prose/markdown content.
+            try:
+                r = subprocess.run(
+                    [claude_exe, "-p"] + flags + [prompt[:25000]],
+                    capture_output=True,
+                    env=env,
+                    timeout=timeout,
+                    cwd=home_dir,
+                )
+                out = _decode_output(r.stdout)
+                if out:
+                    return out
+                err = _decode_output(r.stderr) or "(응답 없음)"
+                raise RuntimeError(f"Claude CLI 오류:\n{err}")
+            except subprocess.TimeoutExpired:
+                raise RuntimeError(
+                    f"Claude CLI 응답 시간 초과 ({timeout // 60}분).\n"
+                    "파일 내용이 너무 길거나 네트워크 문제일 수 있습니다."
+                )
+            except RuntimeError:
+                raise
+            except FileNotFoundError:
+                # Resolved exe doesn't actually exist → fall to cmd.exe
+                is_cmd_script = True
+                claude_exe = original_path
+            except Exception as exc:
+                raise RuntimeError(f"Claude CLI 실행 실패: {exc}") from exc
+
+    # ── .CMD fallback via cmd.exe "call" trick ────────────────────────────────
+    # cmd.exe has an 8 192-char command-line limit.  Cap the prompt to 6 000
+    # chars so that exe path + flags + prompt stays well under that limit.
+    short_prompt = prompt[:6000]
     try:
         r = subprocess.run(
-            ["cmd.exe", "/c", "call", claude_exe] + flags + [prompt],
+            ["cmd.exe", "/c", "call", claude_exe, "-p"] + flags + [short_prompt],
             capture_output=True,
             env=env,
             timeout=timeout,
@@ -403,7 +449,7 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
         out = _decode_output(r.stdout)
         if out:
             return out
-        err = _decode_output(r.stderr) or _decode_output(r.stdout) or "(응답 없음)"
+        err = _decode_output(r.stderr) or "(응답 없음)"
         raise RuntimeError(f"Claude CLI 오류:\n{err}")
     except subprocess.TimeoutExpired:
         raise RuntimeError(
