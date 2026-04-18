@@ -298,6 +298,25 @@ def _build_file_info(content: ProcessedContent) -> str:
     return "\n".join(parts)
 
 
+def _resolve_cmd_to_exe(cmd_path: str) -> str:
+    """
+    Read a .CMD/.BAT wrapper and extract the native .EXE it delegates to.
+    Example:  "C:\\path\\claude.exe" %*  →  returns that .exe path.
+    Falls back to the original cmd_path if parsing fails or the exe is missing.
+    """
+    try:
+        with open(cmd_path, encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        m = re.search(r'"([^"]+\.exe)"', content, re.IGNORECASE)
+        if m:
+            exe = m.group(1)
+            if os.path.isfile(exe):
+                return exe
+    except Exception:
+        pass
+    return cmd_path
+
+
 def _win_short(path: str) -> str:
     """
     Return the Windows 8.3 short-path form of *path* (guaranteed no spaces).
@@ -340,6 +359,15 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
     """
     prompt_bytes = prompt.encode("utf-8")
     is_cmd_script = claude_exe.lower().endswith((".cmd", ".bat"))
+
+    # ── Resolve .CMD wrapper → native .EXE (e.g. Claude Desktop installs) ────
+    # Many Windows installs create a thin .CMD that just calls a versioned .EXE.
+    # Reading the .CMD lets us bypass cmd.exe entirely and pipe stdin directly.
+    if is_cmd_script:
+        resolved = _resolve_cmd_to_exe(claude_exe)
+        if not resolved.lower().endswith((".cmd", ".bat")):
+            claude_exe = resolved
+            is_cmd_script = False
 
     with tempfile.TemporaryDirectory() as tmpdir:
         prompt_path = os.path.join(tmpdir, "prompt.txt")
@@ -616,20 +644,14 @@ def validate_cli() -> bool:
     path = _find_claude_cli()
     if not path:
         return False
-    is_cmd = path.lower().endswith((".cmd", ".bat"))
+    # Resolve .CMD wrapper → native .EXE so we don't need cmd.exe
+    if path.lower().endswith((".cmd", ".bat")):
+        path = _resolve_cmd_to_exe(path)
     try:
-        if is_cmd:
-            # "call" trick: prevents cmd.exe outer-quote-stripping that breaks
-            # paths with spaces (e.g. C:\Users\Hanjun Sim\claude.CMD)
-            result = subprocess.run(
-                ["cmd.exe", "/c", "call", path, "--version"],
-                capture_output=True, timeout=15,
-            )
-        else:
-            result = subprocess.run(
-                [path, "--version"],
-                capture_output=True, timeout=15,
-            )
+        result = subprocess.run(
+            [path, "--version"],
+            capture_output=True, timeout=15,
+        )
         return result.returncode == 0
     except Exception:
         return False
