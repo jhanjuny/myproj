@@ -475,33 +475,57 @@ def _find_claude_cli() -> str | None:
     """
     Find the claude executable.
     Prefer the native .EXE (no cmd.exe wrapper → no 8192-char arg limit).
+
+    Search order:
+      1. Windows Store / MSIX package  (LocalCache path — most common on Win11)
+      2. Classic APPDATA claude-code install
+      3. Other known native-EXE locations
+      4. PATH (may return .CMD wrapper)
+      5. npm global install
     """
+    import glob as _glob
+
     appdata = os.environ.get("APPDATA", "")
     localappdata = os.environ.get("LOCALAPPDATA", "")
     home = os.path.expanduser("~")
 
-    # ── 1. Native .EXE builds (Claude Desktop / Claude Code installer) ────────
-    native_candidates = []
-    # Versioned claude-code directory (Claude Desktop)
+    # ── 1. Windows Store / MSIX package ──────────────────────────────────────
+    # Claude installed from Microsoft Store lives at:
+    #   %LOCALAPPDATA%\Packages\Claude_<suffix>\LocalCache\Roaming\Claude\claude-code\<ver>\claude.exe
+    packages_dir = os.path.join(localappdata, "Packages")
+    if os.path.isdir(packages_dir):
+        for pkg in sorted(_glob.glob(os.path.join(packages_dir, "Claude_*")), reverse=True):
+            cc = os.path.join(pkg, "LocalCache", "Roaming", "Claude", "claude-code")
+            if os.path.isdir(cc):
+                for ver in sorted(os.listdir(cc), reverse=True):
+                    for ext in ("claude.exe", "claude.EXE"):
+                        p = os.path.join(cc, ver, ext)
+                        if os.path.isfile(p):
+                            return p
+
+    # ── 2. Classic APPDATA claude-code install ────────────────────────────────
     cc_dir = os.path.join(appdata, "Claude", "claude-code")
     if os.path.isdir(cc_dir):
         for ver in sorted(os.listdir(cc_dir), reverse=True):
-            native_candidates.append(os.path.join(cc_dir, ver, "claude.exe"))
-            native_candidates.append(os.path.join(cc_dir, ver, "claude.EXE"))
-    native_candidates += [
+            for ext in ("claude.exe", "claude.EXE"):
+                p = os.path.join(cc_dir, ver, ext)
+                if os.path.isfile(p):
+                    return p
+
+    # ── 3. Other known native-EXE locations ──────────────────────────────────
+    for c in [
         os.path.join(localappdata, "Programs", "claude", "claude.exe"),
         os.path.join(appdata, "Claude", "claude.exe"),
-    ]
-    for c in native_candidates:
+    ]:
         if os.path.isfile(c):
             return c
 
-    # ── 2. PATH lookup (may return .CMD wrapper — acceptable fallback) ─────────
+    # ── 4. PATH lookup (may return .CMD wrapper — acceptable fallback) ────────
     found = shutil.which("claude")
     if found:
         return found
 
-    # ── 3. Common npm / manual install locations ──────────────────────────────
+    # ── 5. npm global install ─────────────────────────────────────────────────
     for c in [
         os.path.join(appdata, "npm", "claude.cmd"),
         os.path.join(home, "AppData", "Roaming", "npm", "claude.cmd"),
