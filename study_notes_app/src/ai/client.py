@@ -298,25 +298,45 @@ def _build_file_info(content: ProcessedContent) -> str:
     return "\n".join(parts)
 
 
+def _win_short(path: str) -> str:
+    """
+    Return the Windows 8.3 short-path form of *path* (guaranteed no spaces).
+    Falls back to the original path if GetShortPathNameW is unavailable or fails.
+    """
+    try:
+        import ctypes
+        buf = ctypes.create_unicode_buffer(32768)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf)):
+            short = buf.value
+            if short:
+                return short
+    except Exception:
+        pass
+    return path
+
+
 def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> str:
     """
     Run claude CLI and return text output.
 
-    Root problems on Windows:
-      • subprocess(["cmd.exe", "/c", cmd]) passes cmd through list2cmdline which
-        escapes internal quotes as \\" → path-with-spaces breaks.
-        Fix: shell=True so Python hands the string directly to cmd.exe unchanged.
-      • npm-installed claude is a .CMD wrapper → 8 192-char arg limit.
-        Fix: write prompt to a temp file and use < redirect or type pipe.
-      • `claude -p -` stdin sentinel not reliably supported.
-        Fix: try both --print and -p flags; fall back gracefully.
+    The core Windows quoting problem:
+      subprocess(["cmd.exe", "/c", cmd]) → list2cmdline quotes cmd as "cmd"
+      → cmd.exe /c "..." strips outer quotes, breaking inner-quoted paths.
+      shell=True is equally broken: Python wraps the string in cmd.exe /c "...",
+      same stripping applies.
+
+    Key insight — the "call" trick:
+      ["cmd.exe", "/c", "call", exe_path, flag]
+      list2cmdline → cmd.exe /c call "C:\\path with spaces\\claude.CMD" flag
+      cmd.exe sees "call ..." (does NOT start with "), skips quote-stripping,
+      and "call" correctly handles the quoted path with spaces.  ✓
 
     Strategy order:
-      1. Native .EXE only  — direct stdin PIPE  (no shell involved)
-      2. shell=True cmd:   claude --print < prompt.txt
-      3. shell=True cmd:   type prompt.txt | claude --print
-      4. PowerShell pipe   (shell=True)
-      5. Last resort       — truncate + shell=True
+      1. Native .EXE only  — direct stdin PIPE  (no cmd.exe involved)
+      2. cmd /c call + stdin PIPE — works for .CMD wrappers with spaces in path
+      3. short-path file redirect — GetShortPathNameW removes spaces entirely
+      4. PowerShell via env vars  — robust cross-version fallback
+      5. Last resort              — truncated arg via call trick
     """
     prompt_bytes = prompt.encode("utf-8")
     is_cmd_script = claude_exe.lower().endswith((".cmd", ".bat"))
@@ -328,32 +348,53 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
 
         # ── Strategy 1: direct stdin PIPE (native .EXE only) ─────────────────
         if not is_cmd_script:
-            for print_flag in (["--print"], ["-p"]):
+            for flag in (["-p"], ["--print"], []):
                 try:
                     proc = subprocess.Popen(
-                        [claude_exe] + print_flag,
+                        [claude_exe] + flag,
                         stdin=subprocess.PIPE,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         env=env,
                     )
-                    stdout_b, _ = proc.communicate(input=prompt_bytes, timeout=timeout)
-                    out = _decode_output(stdout_b)
+                    out_b, _ = proc.communicate(input=prompt_bytes, timeout=timeout)
+                    out = _decode_output(out_b)
                     if out:
                         return out
                 except (OSError, subprocess.SubprocessError, ValueError):
                     continue
 
-        # quote the exe path once — used in all shell-based strategies
-        q = claude_exe.replace('"', '\\"')   # escape any embedded " in path
-        p = prompt_path                       # tempdir paths have no special chars
+        # ── Strategy 2: cmd /c call + stdin PIPE ─────────────────────────────
+        # "call" as a separate token → cmd.exe does NOT apply outer-quote-
+        # stripping, so "C:\path with spaces\claude.CMD" is preserved intact.
+        # Stdin PIPE is inherited through cmd.exe → call → node.js.
+        for flag in (["-p"], ["--print"], []):
+            try:
+                proc = subprocess.Popen(
+                    ["cmd.exe", "/c", "call", claude_exe] + flag,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=env,
+                )
+                out_b, _ = proc.communicate(input=prompt_bytes, timeout=timeout)
+                out = _decode_output(out_b)
+                if out:
+                    return out
+            except (OSError, subprocess.SubprocessError, ValueError):
+                continue
 
-        # ── Strategy 2: shell=True  file redirect  < prompt.txt ──────────────
-        for print_arg in ("--print", "-p"):
-            cmd = f'chcp 65001 > nul 2>&1 && "{q}" {print_arg} < "{p}"'
+        # ── Strategy 3: 8.3 short paths + file redirect ───────────────────────
+        # GetShortPathNameW → e.g. "C:\USERS\HANJUN~1\claude.CMD" (no spaces)
+        q = _win_short(claude_exe)
+        p = _win_short(prompt_path)
+
+        for flag in ("-p", "--print"):
+            # If short-path succeeded, no quoting needed; add quotes as safety net
+            cmd = f'chcp 65001 > nul 2>&1 && "{q}" {flag} < "{p}"'
             try:
                 r = subprocess.run(
-                    cmd, shell=True,
+                    ["cmd.exe", "/c", cmd],
                     capture_output=True, env=env, timeout=timeout,
                 )
                 out = _decode_output(r.stdout)
@@ -362,31 +403,21 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
             except (OSError, subprocess.SubprocessError):
                 continue
 
-        # ── Strategy 3: shell=True  type pipe  type prompt.txt | claude ──────
-        for print_arg in ("--print", "-p"):
-            cmd = f'chcp 65001 > nul 2>&1 && type "{p}" | "{q}" {print_arg}'
-            try:
-                r = subprocess.run(
-                    cmd, shell=True,
-                    capture_output=True, env=env, timeout=timeout,
-                )
-                out = _decode_output(r.stdout)
-                if out:
-                    return out
-            except (OSError, subprocess.SubprocessError):
-                continue
+        # ── Strategy 4: PowerShell — pass paths via env vars (no quoting) ─────
+        env4 = env.copy()
+        env4["_CC_EXE"]    = claude_exe
+        env4["_CC_PROMPT"] = prompt_path
 
-        # ── Strategy 4: PowerShell pipe (shell=True) ─────────────────────────
-        for print_arg in ("--print", "-p"):
-            ps_inner = (
-                f'$env:PYTHONIOENCODING="utf-8"; '
-                f'Get-Content -Raw -Encoding UTF8 \\"{p}\\" | & \\"{q}\\" {print_arg}'
+        for flag in ("-p", "--print"):
+            ps = (
+                f'Get-Content -Raw -Encoding UTF8 $env:_CC_PROMPT '
+                f'| & $env:_CC_EXE {flag}'
             )
-            ps_cmd = f'powershell -NoProfile -NonInteractive -Command "{ps_inner}"'
             try:
                 r = subprocess.run(
-                    ps_cmd, shell=True,
-                    capture_output=True, env=env, timeout=timeout,
+                    ["powershell.exe", "-NoProfile", "-NonInteractive",
+                     "-Command", ps],
+                    capture_output=True, env=env4, timeout=timeout,
                 )
                 out = _decode_output(r.stdout)
                 if out:
@@ -394,12 +425,11 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
             except (OSError, subprocess.SubprocessError):
                 continue
 
-    # ── Strategy 5: last resort — truncate + shell=True ──────────────────────
-    truncated = prompt[:5000].replace('"', "'")   # strip " to avoid quoting hell
-    cmd5 = f'chcp 65001 > nul 2>&1 && "{q}" -p "{truncated}"'
+    # ── Strategy 5: last resort — call trick + truncated arg ─────────────────
+    truncated = prompt[:5000]
     try:
         r = subprocess.run(
-            cmd5, shell=True,
+            ["cmd.exe", "/c", "call", claude_exe, "-p", truncated],
             capture_output=True, env=env, timeout=timeout,
         )
         out = _decode_output(r.stdout)
@@ -589,10 +619,11 @@ def validate_cli() -> bool:
     is_cmd = path.lower().endswith((".cmd", ".bat"))
     try:
         if is_cmd:
-            # shell=True so Python doesn't escape the quotes around a path with spaces
+            # "call" trick: prevents cmd.exe outer-quote-stripping that breaks
+            # paths with spaces (e.g. C:\Users\Hanjun Sim\claude.CMD)
             result = subprocess.run(
-                f'"{path}" --version',
-                shell=True, capture_output=True, timeout=15,
+                ["cmd.exe", "/c", "call", path, "--version"],
+                capture_output=True, timeout=15,
             )
         else:
             result = subprocess.run(
