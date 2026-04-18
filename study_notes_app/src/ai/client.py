@@ -1,9 +1,11 @@
 """
-Claude AI client — supports two backends:
+Claude AI client — supports three backends:
 
-  1. "api"  → Anthropic SDK (API key required)
-  2. "cli"  → Claude Code CLI subprocess (team / pro 계정, API key 불필요)
-              `claude` 명령이 PATH에 있어야 함 (Claude Code 설치 전제)
+  1. "api"    → Anthropic SDK (API key required)
+  2. "cli"    → Claude Code CLI subprocess (team / pro 계정, API key 불필요)
+  3. "ollama" → Local Ollama server (http://localhost:11434, 완전 무료·오프라인)
+               `ollama` 설치 후 원하는 모델을 pull 해두면 사용 가능
+               https://ollama.com
 """
 from __future__ import annotations
 
@@ -117,18 +119,123 @@ class CliClient:
         return _fallback_subject(note_markdown)
 
 
+# ── Backend: Ollama local server ──────────────────────────────────────────────
+
+_OLLAMA_DEFAULT_URL   = "http://localhost:11434"
+_OLLAMA_DEFAULT_MODEL = "gemma3:4b"
+
+
+class OllamaClient:
+    """
+    Calls a local Ollama server via its HTTP API.
+    Streaming is token-by-token using the /api/chat endpoint (NDJSON).
+    Images are passed as base64 blobs (multimodal models only; ignored otherwise).
+    """
+
+    def __init__(
+        self,
+        model: str = _OLLAMA_DEFAULT_MODEL,
+        base_url: str = _OLLAMA_DEFAULT_URL,
+    ):
+        self._model = model
+        self._base_url = base_url.rstrip("/")
+
+    def generate_note_stream(self, content: ProcessedContent) -> Iterator[str]:
+        import requests
+
+        messages = self._build_ollama_messages(content)
+        try:
+            resp = requests.post(
+                f"{self._base_url}/api/chat",
+                json={"model": self._model, "messages": messages, "stream": True},
+                stream=True,
+                timeout=300,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            raise RuntimeError(
+                f"Ollama 서버 연결 실패: {e}\n"
+                "Ollama가 실행 중인지 확인하세요 (ollama serve)."
+            ) from e
+
+        for raw_line in resp.iter_lines():
+            if not raw_line:
+                continue
+            try:
+                data = json.loads(raw_line)
+            except json.JSONDecodeError:
+                continue
+            token = data.get("message", {}).get("content", "")
+            if token:
+                yield token
+            if data.get("done"):
+                break
+
+    def infer_subject_and_chapter(self, note_markdown: str) -> dict:
+        import requests
+
+        preview = note_markdown[:1500]
+        prompt  = SUBJECT_INFERENCE_PROMPT.format(note_preview=preview)
+        try:
+            resp = requests.post(
+                f"{self._base_url}/api/chat",
+                json={
+                    "model": self._model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            raw = resp.json()["message"]["content"].strip()
+            m = re.search(r'\{.*?\}', raw, re.DOTALL)
+            if m:
+                return json.loads(m.group())
+        except Exception:
+            pass
+        return _fallback_subject(note_markdown)
+
+    # ── private ───────────────────────────────────────────────────────────────
+
+    def _build_ollama_messages(self, content: ProcessedContent) -> list[dict]:
+        file_info = _build_file_info(content)
+        user_text = (
+            f"{SYSTEM_PROMPT}\n\n---\n\n"
+            f"{build_note_user_message(content.text, file_info)}"
+        )
+        msg: dict = {"role": "user", "content": user_text}
+
+        # Attach images for multimodal models (llava, gemma3, etc.)
+        if content.images:
+            msg["images"] = [
+                img.to_base64()
+                for img in content.images[:10]   # conservative limit
+                if img.data
+            ]
+        return [msg]
+
+
 # ── Unified facade ────────────────────────────────────────────────────────────
 
 class ClaudeClient:
-    """Public interface — wraps either ApiKeyClient or CliClient."""
+    """Public interface — wraps ApiKeyClient, CliClient, or OllamaClient."""
 
-    def __init__(self, api_key: str | None = None, use_cli: bool = False):
-        if use_cli:
+    def __init__(
+        self,
+        api_key: str | None = None,
+        use_cli: bool = False,
+        use_ollama: bool = False,
+        ollama_model: str = _OLLAMA_DEFAULT_MODEL,
+        ollama_base_url: str = _OLLAMA_DEFAULT_URL,
+    ):
+        if use_ollama:
+            self._backend = OllamaClient(model=ollama_model, base_url=ollama_base_url)
+        elif use_cli:
             self._backend = CliClient()
         elif api_key:
             self._backend = ApiKeyClient(api_key)
         else:
-            raise ValueError("API 키 또는 CLI 모드 중 하나를 선택하세요.")
+            raise ValueError("API 키, CLI 모드, 또는 Ollama 모드 중 하나를 선택하세요.")
 
     def generate_note_stream(self, content: ProcessedContent) -> Iterator[str]:
         return self._backend.generate_note_stream(content)
@@ -401,12 +508,63 @@ def load_use_cli() -> bool:
     return load_settings().get("use_cli", False)
 
 
+def load_use_ollama() -> bool:
+    return load_settings().get("use_ollama", False)
+
+
+def save_use_ollama(value: bool):
+    save_settings({"use_ollama": value})
+
+
 def save_api_key(key: str):
     save_settings({"api_key": key})
 
 
 def save_use_cli(value: bool):
     save_settings({"use_cli": value})
+
+
+def load_ollama_settings() -> tuple[str, str]:
+    """Return (model, base_url) from persisted settings."""
+    s = load_settings()
+    return (
+        s.get("ollama_model",    _OLLAMA_DEFAULT_MODEL),
+        s.get("ollama_base_url", _OLLAMA_DEFAULT_URL),
+    )
+
+
+def save_ollama_settings(model: str, base_url: str):
+    save_settings({"ollama_model": model, "ollama_base_url": base_url})
+
+
+def list_ollama_models(base_url: str = _OLLAMA_DEFAULT_URL) -> list[str]:
+    """Return names of all locally available Ollama models."""
+    try:
+        import requests
+        resp = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=5)
+        if resp.status_code == 200:
+            return [m["name"] for m in resp.json().get("models", [])]
+    except Exception:
+        pass
+    return []
+
+
+def validate_ollama(
+    base_url: str = _OLLAMA_DEFAULT_URL,
+    model: str = _OLLAMA_DEFAULT_MODEL,
+) -> bool:
+    """Return True if Ollama is reachable and the given model is available."""
+    try:
+        import requests
+        resp = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=5)
+        if resp.status_code != 200:
+            return False
+        available = [m["name"].split(":")[0] for m in resp.json().get("models", [])]
+        # Accept exact match or base-name match (e.g. "gemma3" matches "gemma3:4b")
+        target = model.split(":")[0]
+        return target in available or model in [m["name"] for m in resp.json().get("models", [])]
+    except Exception:
+        return False
 
 
 def validate_api_key(key: str) -> bool:

@@ -12,7 +12,10 @@ from PyQt5.QtCore import QThread, pyqtSignal
 
 from src.processors.dispatcher import dispatch_multiple, merge_contents
 from src.processors.base import ProcessorError
-from src.ai.client import ClaudeClient, load_use_cli
+from src.ai.client import (
+    ClaudeClient, load_use_cli,
+    _OLLAMA_DEFAULT_MODEL, _OLLAMA_DEFAULT_URL,
+)
 from src.storage import database as db
 
 
@@ -39,15 +42,21 @@ class NoteGeneratorThread(QThread):
         subject_id: int | None = None,
         chapter_id: int | None = None,
         use_cli: bool = False,
+        use_ollama: bool = False,
+        ollama_model: str = _OLLAMA_DEFAULT_MODEL,
+        ollama_base_url: str = _OLLAMA_DEFAULT_URL,
         parent=None,
     ):
         super().__init__(parent)
-        self._api_key = api_key
-        self._use_cli = use_cli
-        self._file_paths = file_paths
-        self._subject_id = subject_id
-        self._chapter_id = chapter_id
-        self._note_buffer = ""
+        self._api_key       = api_key
+        self._use_cli       = use_cli
+        self._use_ollama    = use_ollama
+        self._ollama_model  = ollama_model
+        self._ollama_base_url = ollama_base_url
+        self._file_paths    = file_paths
+        self._subject_id    = subject_id
+        self._chapter_id    = chapter_id
+        self._note_buffer   = ""
 
     def run(self):
         try:
@@ -81,7 +90,13 @@ class NoteGeneratorThread(QThread):
         # ── Step 3: Stream note from Claude ───────────────────────────────────
         self.progress.emit("🤖 AI 노트 생성 중 (스트리밍)...")
 
-        client = ClaudeClient(api_key=self._api_key, use_cli=self._use_cli)
+        client = ClaudeClient(
+            api_key=self._api_key,
+            use_cli=self._use_cli,
+            use_ollama=self._use_ollama,
+            ollama_model=self._ollama_model,
+            ollama_base_url=self._ollama_base_url,
+        )
         self._note_buffer = ""
 
         try:

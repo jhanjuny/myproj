@@ -31,8 +31,11 @@ from src.gui.widgets.sidebar import SidebarWidget
 from src.gui.widgets.upload_panel import UploadPanel
 from src.gui.widgets.processing_dialog import ProcessingDialog
 from src.ai.client import (
-    ClaudeClient, load_api_key, load_use_cli,
-    save_api_key, save_use_cli, validate_api_key, validate_cli,
+    ClaudeClient,
+    load_api_key, load_use_cli, load_use_ollama, load_ollama_settings,
+    save_api_key, save_use_cli, save_use_ollama, save_ollama_settings,
+    validate_api_key, validate_cli, validate_ollama, list_ollama_models,
+    _OLLAMA_DEFAULT_MODEL, _OLLAMA_DEFAULT_URL,
 )
 from src.ai.note_generator import NoteGeneratorThread
 from src.storage import database as db
@@ -50,7 +53,11 @@ class MainWindow(QMainWindow):
 
         self._current_note_id: int | None = None
         self._api_key: str | None = load_api_key()
-        self._use_cli: bool = load_use_cli()
+        self._use_cli: bool       = load_use_cli()
+        self._use_ollama: bool    = load_use_ollama()
+        _om, _ou = load_ollama_settings()
+        self._ollama_model: str    = _om
+        self._ollama_base_url: str = _ou
         self._generator_thread: NoteGeneratorThread | None = None
         self._processing_dialog: ProcessingDialog | None = None
 
@@ -58,8 +65,10 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._bind_shortcuts()
 
-        if not self._use_cli and not self._api_key:
+        if not self._use_ollama and not self._use_cli and not self._api_key:
             self._prompt_api_key()
+        else:
+            self._update_api_status_indicator()
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -204,9 +213,9 @@ class MainWindow(QMainWindow):
     def _on_generate_requested(
         self, file_paths: list, subject_id, chapter_id
     ):
-        if not self._use_cli and not self._api_key:
+        if not self._use_cli and not self._use_ollama and not self._api_key:
             self._prompt_api_key()
-            if not self._use_cli and not self._api_key:
+            if not self._use_cli and not self._use_ollama and not self._api_key:
                 return
 
         if not file_paths:
@@ -222,6 +231,9 @@ class MainWindow(QMainWindow):
             subject_id=subject_id,
             chapter_id=chapter_id,
             use_cli=self._use_cli,
+            use_ollama=self._use_ollama,
+            ollama_model=self._ollama_model,
+            ollama_base_url=self._ollama_base_url,
             parent=self,
         )
         self._generator_thread.progress.connect(self._processing_dialog.set_status)
@@ -305,46 +317,90 @@ class MainWindow(QMainWindow):
     def _open_settings(self):
         from PyQt5.QtWidgets import (
             QDialog, QFormLayout, QDialogButtonBox, QRadioButton,
-            QGroupBox, QVBoxLayout,
+            QGroupBox, QVBoxLayout, QComboBox, QPushButton, QHBoxLayout,
         )
-        from PyQt5.QtCore import Qt
 
         dlg = QDialog(self)
         dlg.setWindowTitle("⚙️  설정 — AI 연결")
-        dlg.setFixedWidth(480)
+        dlg.setFixedWidth(520)
         dlg.setStyleSheet(DARK_QSS)
 
         outer = QVBoxLayout(dlg)
 
-        # ── Auth mode ──────────────────────────────────────────────────────────
+        # ── 연결 방식 ──────────────────────────────────────────────────────────
         mode_box = QGroupBox("AI 연결 방식")
         mode_box.setStyleSheet("QGroupBox { font-weight: bold; }")
         mode_layout = QVBoxLayout(mode_box)
 
+        rb_ollama = QRadioButton(
+            "🦙  Ollama (로컬 LLM)  —  완전 무료·오프라인\n"
+            "    ollama.com에서 설치 후 원하는 모델 pull"
+        )
         rb_cli = QRadioButton(
-            "🏢  팀/Pro 계정 (Claude Code CLI)  —  API 키 불필요\n"
-            "    Claude Code가 설치되어 있으면 자동으로 인증됩니다."
+            "🏢  팀/Pro 계정 (Claude Code CLI)  —  API 키 불필요"
         )
         rb_api = QRadioButton(
             "🔑  Anthropic API 키  —  console.anthropic.com에서 발급"
         )
-        rb_cli.setChecked(self._use_cli)
-        rb_api.setChecked(not self._use_cli)
+        rb_ollama.setChecked(self._use_ollama)
+        rb_cli.setChecked(self._use_cli and not self._use_ollama)
+        rb_api.setChecked(not self._use_cli and not self._use_ollama)
 
+        mode_layout.addWidget(rb_ollama)
         mode_layout.addWidget(rb_cli)
         mode_layout.addWidget(rb_api)
         outer.addWidget(mode_box)
 
-        # ── API key field (only relevant when rb_api) ─────────────────────────
-        form = QFormLayout()
+        # ── Ollama 설정 ────────────────────────────────────────────────────────
+        ollama_box = QGroupBox("Ollama 설정")
+        ollama_form = QFormLayout(ollama_box)
+
+        model_combo = QComboBox()
+        model_combo.setEditable(True)
+        model_combo.setPlaceholderText("gemma3:4b")
+        # 현재 저장된 모델 추가
+        model_combo.addItem(self._ollama_model)
+
+        refresh_btn = QPushButton("🔄 목록 새로고침")
+        def _refresh_models():
+            models = list_ollama_models(self._ollama_base_url)
+            current = model_combo.currentText()
+            model_combo.clear()
+            model_combo.addItems(models if models else [self._ollama_model])
+            idx = model_combo.findText(current)
+            if idx >= 0:
+                model_combo.setCurrentIndex(idx)
+            else:
+                model_combo.setCurrentText(current)
+        refresh_btn.clicked.connect(_refresh_models)
+
+        url_edit = QLineEdit(self._ollama_base_url)
+        url_edit.setPlaceholderText("http://localhost:11434")
+
+        model_row = QHBoxLayout()
+        model_row.addWidget(model_combo, 1)
+        model_row.addWidget(refresh_btn)
+        ollama_form.addRow("모델:", model_row)
+        ollama_form.addRow("서버 주소:", url_edit)
+        outer.addWidget(ollama_box)
+
+        # ── API 키 ────────────────────────────────────────────────────────────
+        api_box = QGroupBox("Anthropic API 키")
+        api_form = QFormLayout(api_box)
         key_edit = QLineEdit(self._api_key or "")
         key_edit.setEchoMode(QLineEdit.Password)
         key_edit.setPlaceholderText("sk-ant-…")
-        key_edit.setEnabled(not self._use_cli)
-        form.addRow("API 키:", key_edit)
-        outer.addLayout(form)
+        api_form.addRow("API 키:", key_edit)
+        outer.addWidget(api_box)
 
-        rb_cli.toggled.connect(lambda checked: key_edit.setDisabled(checked))
+        def _update_enabled():
+            ollama_box.setEnabled(rb_ollama.isChecked())
+            api_box.setEnabled(rb_api.isChecked())
+
+        rb_ollama.toggled.connect(lambda _: _update_enabled())
+        rb_cli.toggled.connect(lambda _: _update_enabled())
+        rb_api.toggled.connect(lambda _: _update_enabled())
+        _update_enabled()
 
         # ── Buttons ────────────────────────────────────────────────────────────
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -355,31 +411,56 @@ class MainWindow(QMainWindow):
         if not dlg.exec_():
             return
 
-        use_cli = rb_cli.isChecked()
+        if rb_ollama.isChecked():
+            model    = model_combo.currentText().strip() or _OLLAMA_DEFAULT_MODEL
+            base_url = url_edit.text().strip() or _OLLAMA_DEFAULT_URL
+            self._status_label.setText("🔍  Ollama 확인 중...")
+            if validate_ollama(base_url, model):
+                self._use_ollama      = True
+                self._use_cli         = False
+                self._ollama_model    = model
+                self._ollama_base_url = base_url
+                save_ollama_settings(model, base_url)
+                save_use_ollama(True)
+                save_use_cli(False)
+                self._update_api_status_indicator()
+                self._status_label.setText(f"✅  Ollama 연결됨 ({model})")
+            else:
+                QMessageBox.warning(
+                    self, "Ollama 오류",
+                    f"모델 '{model}'을(를) 찾을 수 없습니다.\n\n"
+                    "터미널에서 실행하세요:\n"
+                    f"  ollama pull {model}\n\n"
+                    "Ollama가 실행 중인지도 확인하세요 (ollama serve)."
+                )
 
-        if use_cli:
+        elif rb_cli.isChecked():
             self._status_label.setText("🔍  Claude Code CLI 확인 중...")
             if validate_cli():
-                self._use_cli = True
+                self._use_cli    = True
+                self._use_ollama = False
                 save_use_cli(True)
+                save_use_ollama(False)
                 self._update_api_status_indicator()
                 self._status_label.setText("✅  팀 계정 CLI 연결 확인됨")
             else:
                 QMessageBox.warning(
                     self, "오류",
-                    "claude CLI를 찾을 수 없습니다.\n\n"
-                    "Claude Code가 설치되어 있는지 확인하세요.\n"
+                    "claude CLI를 찾을 수 없습니다.\n"
                     "터미널에서 'claude --version' 이 실행되어야 합니다."
                 )
-        else:
+
+        else:  # API 키
             new_key = key_edit.text().strip()
             if new_key:
                 self._status_label.setText("🔑  API 키 확인 중...")
                 if validate_api_key(new_key):
-                    self._api_key = new_key
-                    self._use_cli = False
+                    self._api_key    = new_key
+                    self._use_cli    = False
+                    self._use_ollama = False
                     save_api_key(new_key)
                     save_use_cli(False)
+                    save_use_ollama(False)
                     self._update_api_status_indicator()
                     self._status_label.setText("✅  API 키 저장됨")
                 else:
@@ -387,23 +468,25 @@ class MainWindow(QMainWindow):
                     self._status_label.setText("❌  API 키 오류")
 
     def _prompt_api_key(self):
-        """First-run setup dialog — detects CLI automatically."""
+        """First-run setup dialog — auto-detects Ollama and CLI."""
         from PyQt5.QtWidgets import (
             QDialog, QVBoxLayout, QDialogButtonBox, QRadioButton,
-            QGroupBox, QFormLayout,
+            QGroupBox, QFormLayout, QComboBox, QPushButton, QHBoxLayout,
         )
 
-        cli_available = validate_cli()
+        ollama_available = validate_ollama(self._ollama_base_url, self._ollama_model)
+        cli_available    = validate_cli()
+        ollama_models    = list_ollama_models(self._ollama_base_url)
 
         dlg = QDialog(self)
         dlg.setWindowTitle("StudyNotes AI — 첫 실행 설정")
-        dlg.setFixedWidth(500)
+        dlg.setFixedWidth(520)
         dlg.setStyleSheet(DARK_QSS)
 
         outer = QVBoxLayout(dlg)
 
         info = QLabel(
-            "Claude AI 연결 방식을 선택하세요.\n"
+            "AI 연결 방식을 선택하세요.\n"
             "언제든지 ⚙️ 설정에서 변경할 수 있습니다."
         )
         info.setWordWrap(True)
@@ -413,37 +496,61 @@ class MainWindow(QMainWindow):
         mode_box = QGroupBox("연결 방식")
         mode_layout = QVBoxLayout(mode_box)
 
-        cli_label = (
-            "🏢  팀/Pro 계정 (Claude Code CLI)  ✅ 감지됨\n"
-            "    API 키 불필요 — 현재 로그인된 계정 그대로 사용"
-            if cli_available else
-            "🏢  팀/Pro 계정 (Claude Code CLI)  ⚠️ 미감지\n"
-            "    Claude Code가 설치되어 있어야 합니다"
+        rb_ollama = QRadioButton(
+            f"🦙  Ollama (로컬 LLM)  {'✅ 감지됨' if ollama_available else '⚠️ 미감지'}\n"
+            "    완전 무료·오프라인 — ollama.com에서 설치"
         )
-        rb_cli = QRadioButton(cli_label)
+        rb_cli = QRadioButton(
+            f"🏢  Claude Code CLI  {'✅ 감지됨' if cli_available else '⚠️ 미감지'}\n"
+            "    팀/Pro 계정 — API 키 불필요"
+        )
         rb_api = QRadioButton(
             "🔑  Anthropic API 키\n"
-            "    console.anthropic.com에서 발급한 키 입력"
+            "    console.anthropic.com에서 발급"
         )
 
-        # Default: CLI if available, else API key
-        rb_cli.setChecked(cli_available)
-        rb_api.setChecked(not cli_available)
-        rb_cli.setEnabled(cli_available)
+        # 기본 선택: Ollama > CLI > API 키 순서
+        if ollama_available:
+            rb_ollama.setChecked(True)
+        elif cli_available:
+            rb_cli.setChecked(True)
+        else:
+            rb_api.setChecked(True)
 
+        mode_layout.addWidget(rb_ollama)
         mode_layout.addWidget(rb_cli)
         mode_layout.addWidget(rb_api)
         outer.addWidget(mode_box)
 
-        form = QFormLayout()
+        # ── Ollama 모델 선택 ───────────────────────────────────────────────────
+        ollama_box = QGroupBox("Ollama 모델")
+        ollama_form = QFormLayout(ollama_box)
+        model_combo = QComboBox()
+        model_combo.setEditable(True)
+        if ollama_models:
+            model_combo.addItems(ollama_models)
+            idx = model_combo.findText(self._ollama_model)
+            model_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        else:
+            model_combo.addItem(self._ollama_model)
+        ollama_form.addRow("모델:", model_combo)
+        outer.addWidget(ollama_box)
+
+        # ── API 키 입력 ────────────────────────────────────────────────────────
+        api_form = QFormLayout()
         key_edit = QLineEdit()
         key_edit.setEchoMode(QLineEdit.Password)
         key_edit.setPlaceholderText("sk-ant-…")
-        key_edit.setEnabled(not cli_available)
-        form.addRow("API 키:", key_edit)
-        outer.addLayout(form)
+        api_form.addRow("API 키:", key_edit)
+        outer.addLayout(api_form)
 
-        rb_cli.toggled.connect(lambda checked: key_edit.setDisabled(checked))
+        def _update_enabled():
+            ollama_box.setEnabled(rb_ollama.isChecked())
+            key_edit.setEnabled(rb_api.isChecked())
+        rb_ollama.toggled.connect(lambda _: _update_enabled())
+        rb_cli.toggled.connect(lambda _: _update_enabled())
+        rb_api.toggled.connect(lambda _: _update_enabled())
+        _update_enabled()
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
@@ -453,24 +560,49 @@ class MainWindow(QMainWindow):
         if not dlg.exec_():
             return
 
-        if rb_cli.isChecked():
-            self._use_cli = True
+        if rb_ollama.isChecked():
+            model = model_combo.currentText().strip() or _OLLAMA_DEFAULT_MODEL
+            if validate_ollama(self._ollama_base_url, model):
+                self._use_ollama   = True
+                self._use_cli      = False
+                self._ollama_model = model
+                save_ollama_settings(model, self._ollama_base_url)
+                save_use_ollama(True)
+                save_use_cli(False)
+                self._update_api_status_indicator()
+            else:
+                QMessageBox.warning(
+                    self, "Ollama 오류",
+                    f"모델 '{model}'을(를) 찾을 수 없습니다.\n"
+                    f"터미널에서:  ollama pull {model}"
+                )
+
+        elif rb_cli.isChecked():
+            self._use_cli    = True
+            self._use_ollama = False
             save_use_cli(True)
+            save_use_ollama(False)
             self._update_api_status_indicator()
+
         else:
             key = key_edit.text().strip()
             if key:
                 if validate_api_key(key):
-                    self._api_key = key
-                    self._use_cli = False
+                    self._api_key    = key
+                    self._use_cli    = False
+                    self._use_ollama = False
                     save_api_key(key)
                     save_use_cli(False)
+                    save_use_ollama(False)
                     self._update_api_status_indicator()
                 else:
                     QMessageBox.warning(self, "오류", "유효하지 않은 API 키입니다.")
 
     def _update_api_status_indicator(self):
-        if self._use_cli:
+        if self._use_ollama:
+            self._api_status.setText(f"🟢  Ollama ({self._ollama_model})")
+            self._api_status.setStyleSheet("color: #9ece6a;")
+        elif self._use_cli:
             self._api_status.setText("🟢  팀 계정 (CLI)")
             self._api_status.setStyleSheet("color: #9ece6a;")
         elif self._api_key:
