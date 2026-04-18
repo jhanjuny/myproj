@@ -398,7 +398,9 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
             if out:
                 return out
             err = _decode_output(r.stderr) or "(응답 없음)"
-            raise RuntimeError(f"Claude CLI 오류:\n{err}")
+            raise RuntimeError(
+                f"Claude CLI 오류 [exe={claude_exe!r}, rc={r.returncode}]:\n{err}"
+            )
         except subprocess.TimeoutExpired:
             raise RuntimeError(
                 f"Claude CLI 응답 시간 초과 ({timeout // 60}분).\n"
@@ -411,7 +413,9 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
             is_cmd_script = True
             claude_exe = original_path
         except Exception as exc:
-            raise RuntimeError(f"Claude CLI 실행 실패: {exc}") from exc
+            raise RuntimeError(
+                f"Claude CLI 실행 실패 [exe={claude_exe!r}]: {exc}"
+            ) from exc
 
     # ── .CMD fallback via cmd.exe "call" trick ────────────────────────────────
     # cmd.exe hard limit: 8 192 chars total.
