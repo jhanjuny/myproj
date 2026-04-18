@@ -27,6 +27,8 @@ from PyQt5.QtWidgets import (
 from src.gui.styles import DARK_QSS
 from src.gui.widgets.note_viewer import NoteViewer
 from src.gui.widgets.note_editor import NoteEditorPanel
+import re
+
 from src.gui.widgets.sidebar import SidebarWidget
 from src.gui.widgets.upload_panel import UploadPanel
 from src.gui.widgets.processing_dialog import ProcessingDialog
@@ -39,6 +41,14 @@ from src.ai.client import (
 )
 from src.ai.note_generator import NoteGeneratorThread
 from src.storage import database as db
+
+
+def _safe_export_filename(title: str) -> str:
+    """Return a Windows-safe filename base from a note title."""
+    s = title.replace("—", "-").replace("–", "-")          # em/en dash → hyphen
+    s = re.sub(r'[\\/:*?"<>|]', "_", s)                    # forbidden chars → _
+    s = re.sub(r'[\s_]{2,}', " ", s).strip(" _.")          # collapse whitespace
+    return s or "노트"
 
 
 class MainWindow(QMainWindow):
@@ -163,7 +173,7 @@ class MainWindow(QMainWindow):
 
         # Export
         export_act = QAction("💾  내보내기", self)
-        export_act.setToolTip("마크다운으로 내보내기")
+        export_act.setToolTip("PDF 또는 Markdown으로 내보내기")
         export_act.triggered.connect(self._export_current_note)
         tb.addAction(export_act)
 
@@ -304,13 +314,38 @@ class MainWindow(QMainWindow):
             return
 
         from PyQt5.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getSaveFileName(
-            self, "마크다운으로 내보내기", f"{note['title']}.md",
-            "Markdown (*.md);;All files (*)"
+        safe_name = _safe_export_filename(note["title"])
+
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self, "노트 내보내기", safe_name,
+            "PDF 문서 (*.pdf);;Markdown (*.md);;모든 파일 (*)"
         )
-        if path:
+        if not path:
+            return
+
+        use_pdf = selected_filter.startswith("PDF") or path.lower().endswith(".pdf")
+
+        if use_pdf:
+            if not path.lower().endswith(".pdf"):
+                path += ".pdf"
+            try:
+                from PyQt5.QtGui import QPageLayout, QPageSize
+                from PyQt5.QtCore import QMarginsF
+                layout = QPageLayout(
+                    QPageSize(QPageSize.A4),
+                    QPageLayout.Portrait,
+                    QMarginsF(15.0, 15.0, 15.0, 15.0),
+                )
+                self._viewer.page().printToPdf(path, layout)
+                self._status_label.setText(f"📄  PDF 내보내기 완료: {path}")
+            except Exception as e:
+                QMessageBox.warning(self, "PDF 내보내기 실패",
+                                    f"PDF 생성 중 오류가 발생했습니다:\n{e}")
+        else:
+            if not path.lower().endswith(".md"):
+                path += ".md"
             Path(path).write_text(note["markdown"], encoding="utf-8")
-            self._status_label.setText(f"📥  내보내기 완료: {path}")
+            self._status_label.setText(f"📥  마크다운 내보내기 완료: {path}")
 
     # ── Settings ──────────────────────────────────────────────────────────────
 
