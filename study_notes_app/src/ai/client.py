@@ -341,20 +341,22 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
     """
     Run claude CLI and return text output.
 
-    Empirically verified behaviour (Windows, Claude Code 2.1.x):
-    • claude -p reads the prompt from a CLI *argument*, NOT from stdin.
-      Piping via stdin causes the process to hang indefinitely.
-    • --dangerously-skip-permissions prevents interactive permission prompts
-      from blocking a subprocess that has no TTY.
-    • --no-session-persistence skips session file I/O (faster startup).
-    • cwd = user home → correct auth-token and settings lookup.
-    • Windows CreateProcess hard limit: 32 767 chars total command line.
-      Prompt is capped at 28 000 chars to leave headroom for exe + flags.
-    • .CMD wrappers are resolved to the native .EXE they wrap so that
-      cmd.exe and its 8 192-char limit are bypassed entirely.
+    Confirmed-working invocation (Claude Code 2.1.x on Windows):
+      claude.EXE -p --dangerously-skip-permissions "<prompt>"
+      with cwd = user home directory
+
+    Notes:
+    • --dangerously-skip-permissions suppresses interactive TTY prompts.
+    • --no-session-persistence is intentionally omitted — it causes
+      "지정된 경로를 찾을 수 없습니다" on some installs because the flag
+      tries to resolve a session-cache path that doesn't exist yet.
+    • Prompt length is calculated via list2cmdline so special characters
+      (quotes, backslashes) that inflate the encoded string are accounted
+      for before hitting the 32 767-char CreateProcess limit.
+    • .CMD wrappers are resolved to native .EXE to bypass cmd.exe's
+      8 192-char command-line limit entirely.
     """
     home_dir = os.path.expanduser("~")
-    flags = ["--dangerously-skip-permissions", "--no-session-persistence"]
     original_path = claude_exe  # keep for cmd.exe fallback
 
     # ── Resolve .CMD/.BAT → native .EXE ──────────────────────────────────────
@@ -367,80 +369,58 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
 
     # ── Native .EXE path ─────────────────────────────────────────────────────
     if not is_cmd_script:
-        # Strategy 1: stdin PIPE — no command-line length limit.
-        # --dangerously-skip-permissions suppresses interactive TTY prompts
-        # that would block a subprocess without a terminal.
+        base_cmd = [claude_exe, "-p", "--dangerously-skip-permissions"]
+
+        # Calculate how many raw prompt chars we can pass without exceeding
+        # the 32 767-char Windows CreateProcess command-line limit.
+        # list2cmdline escapes quotes/backslashes, so measure precisely.
+        _overhead = len(subprocess.list2cmdline(base_cmd)) + 1  # +1 for space
+        _max_encoded = 32500 - _overhead  # conservative headroom
+        # Binary-search the largest raw prefix whose encoded form fits.
+        lo, hi = 0, min(len(prompt), 30000)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if len(subprocess.list2cmdline([prompt[:mid]])) <= _max_encoded:
+                lo = mid
+            else:
+                hi = mid - 1
+        prompt_arg = prompt[:lo] if lo > 0 else prompt[:5000]
+
         try:
-            proc = subprocess.Popen(
-                [claude_exe, "-p"] + flags,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+            r = subprocess.run(
+                base_cmd + [prompt_arg],
+                capture_output=True,
                 env=env,
+                timeout=timeout,
                 cwd=home_dir,
             )
-            out_b, _ = proc.communicate(
-                input=prompt.encode("utf-8"), timeout=timeout
-            )
-            out = _decode_output(out_b)
+            out = _decode_output(r.stdout)
             if out:
                 return out
-            # empty output → fall through to CLI-arg strategy
+            err = _decode_output(r.stderr) or "(응답 없음)"
+            raise RuntimeError(f"Claude CLI 오류:\n{err}")
         except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except Exception:
-                pass
             raise RuntimeError(
                 f"Claude CLI 응답 시간 초과 ({timeout // 60}분).\n"
                 "파일 내용이 너무 길거나 네트워크 문제일 수 있습니다."
             )
+        except RuntimeError:
+            raise
         except FileNotFoundError:
-            # Resolved exe doesn't exist → fall back to .CMD path
+            # Resolved exe path doesn't exist → fall to .CMD / cmd.exe
             is_cmd_script = True
             claude_exe = original_path
-        except Exception:
-            pass  # stdin failed silently → try CLI-arg below
-
-        if not is_cmd_script:
-            # Strategy 2: CLI argument.
-            # Cap at 25 000 raw chars; list2cmdline escaping adds overhead but
-            # stays comfortably under the 32 767-char CreateProcess limit for
-            # typical prose/markdown content.
-            try:
-                r = subprocess.run(
-                    [claude_exe, "-p"] + flags + [prompt[:25000]],
-                    capture_output=True,
-                    env=env,
-                    timeout=timeout,
-                    cwd=home_dir,
-                )
-                out = _decode_output(r.stdout)
-                if out:
-                    return out
-                err = _decode_output(r.stderr) or "(응답 없음)"
-                raise RuntimeError(f"Claude CLI 오류:\n{err}")
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(
-                    f"Claude CLI 응답 시간 초과 ({timeout // 60}분).\n"
-                    "파일 내용이 너무 길거나 네트워크 문제일 수 있습니다."
-                )
-            except RuntimeError:
-                raise
-            except FileNotFoundError:
-                # Resolved exe doesn't actually exist → fall to cmd.exe
-                is_cmd_script = True
-                claude_exe = original_path
-            except Exception as exc:
-                raise RuntimeError(f"Claude CLI 실행 실패: {exc}") from exc
+        except Exception as exc:
+            raise RuntimeError(f"Claude CLI 실행 실패: {exc}") from exc
 
     # ── .CMD fallback via cmd.exe "call" trick ────────────────────────────────
-    # cmd.exe has an 8 192-char command-line limit.  Cap the prompt to 6 000
-    # chars so that exe path + flags + prompt stays well under that limit.
-    short_prompt = prompt[:6000]
+    # cmd.exe hard limit: 8 192 chars total.
+    # exe path (~80) + " -p --dangerously-skip-permissions " (~38) + prompt.
+    # Cap prompt at 6 000 chars to stay well under that limit.
     try:
         r = subprocess.run(
-            ["cmd.exe", "/c", "call", claude_exe, "-p"] + flags + [short_prompt],
+            ["cmd.exe", "/c", "call", claude_exe,
+             "-p", "--dangerously-skip-permissions", prompt[:6000]],
             capture_output=True,
             env=env,
             timeout=timeout,
