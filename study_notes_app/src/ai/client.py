@@ -338,135 +338,78 @@ def _run_claude(claude_exe: str, prompt: str, env: dict, timeout: int = 300) -> 
     """
     Run claude CLI and return text output.
 
-    The core Windows quoting problem:
-      subprocess(["cmd.exe", "/c", cmd]) → list2cmdline quotes cmd as "cmd"
-      → cmd.exe /c "..." strips outer quotes, breaking inner-quoted paths.
-      shell=True is equally broken: Python wraps the string in cmd.exe /c "...",
-      same stripping applies.
-
-    Key insight — the "call" trick:
-      ["cmd.exe", "/c", "call", exe_path, flag]
-      list2cmdline → cmd.exe /c call "C:\\path with spaces\\claude.CMD" flag
-      cmd.exe sees "call ..." (does NOT start with "), skips quote-stripping,
-      and "call" correctly handles the quoted path with spaces.  ✓
-
-    Strategy order:
-      1. Native .EXE only  — direct stdin PIPE  (no cmd.exe involved)
-      2. cmd /c call + stdin PIPE — works for .CMD wrappers with spaces in path
-      3. short-path file redirect — GetShortPathNameW removes spaces entirely
-      4. PowerShell via env vars  — robust cross-version fallback
-      5. Last resort              — truncated arg via call trick
+    Empirically verified behaviour (Windows, Claude Code 2.1.x):
+    • claude -p reads the prompt from a CLI *argument*, NOT from stdin.
+      Piping via stdin causes the process to hang indefinitely.
+    • --dangerously-skip-permissions prevents interactive permission prompts
+      from blocking a subprocess that has no TTY.
+    • --no-session-persistence skips session file I/O (faster startup).
+    • cwd = user home → correct auth-token and settings lookup.
+    • Windows CreateProcess hard limit: 32 767 chars total command line.
+      Prompt is capped at 28 000 chars to leave headroom for exe + flags.
+    • .CMD wrappers are resolved to the native .EXE they wrap so that
+      cmd.exe and its 8 192-char limit are bypassed entirely.
     """
-    prompt_bytes = prompt.encode("utf-8")
+    # ── Resolve .CMD/.BAT → native .EXE ──────────────────────────────────────
     is_cmd_script = claude_exe.lower().endswith((".cmd", ".bat"))
-
-    # ── Resolve .CMD wrapper → native .EXE (e.g. Claude Desktop installs) ────
-    # Many Windows installs create a thin .CMD that just calls a versioned .EXE.
-    # Reading the .CMD lets us bypass cmd.exe entirely and pipe stdin directly.
     if is_cmd_script:
         resolved = _resolve_cmd_to_exe(claude_exe)
         if not resolved.lower().endswith((".cmd", ".bat")):
             claude_exe = resolved
             is_cmd_script = False
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        prompt_path = os.path.join(tmpdir, "prompt.txt")
-        with open(prompt_path, "wb") as f:
-            f.write(prompt_bytes)
+    # Cap prompt to stay within Windows CreateProcess command-line limit
+    prompt = prompt[:28000]
 
-        # ── Strategy 1: direct stdin PIPE (native .EXE only) ─────────────────
-        if not is_cmd_script:
-            for flag in (["-p"], ["--print"], []):
-                try:
-                    proc = subprocess.Popen(
-                        [claude_exe] + flag,
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        env=env,
-                    )
-                    out_b, _ = proc.communicate(input=prompt_bytes, timeout=timeout)
-                    out = _decode_output(out_b)
-                    if out:
-                        return out
-                except (OSError, subprocess.SubprocessError, ValueError):
-                    continue
+    home_dir = os.path.expanduser("~")
+    flags = ["-p", "--dangerously-skip-permissions", "--no-session-persistence"]
 
-        # ── Strategy 2: cmd /c call + stdin PIPE ─────────────────────────────
-        # "call" as a separate token → cmd.exe does NOT apply outer-quote-
-        # stripping, so "C:\path with spaces\claude.CMD" is preserved intact.
-        # Stdin PIPE is inherited through cmd.exe → call → node.js.
-        for flag in (["-p"], ["--print"], []):
-            try:
-                proc = subprocess.Popen(
-                    ["cmd.exe", "/c", "call", claude_exe] + flag,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=env,
-                )
-                out_b, _ = proc.communicate(input=prompt_bytes, timeout=timeout)
-                out = _decode_output(out_b)
-                if out:
-                    return out
-            except (OSError, subprocess.SubprocessError, ValueError):
-                continue
-
-        # ── Strategy 3: 8.3 short paths + file redirect ───────────────────────
-        # GetShortPathNameW → e.g. "C:\USERS\HANJUN~1\claude.CMD" (no spaces)
-        q = _win_short(claude_exe)
-        p = _win_short(prompt_path)
-
-        for flag in ("-p", "--print"):
-            # If short-path succeeded, no quoting needed; add quotes as safety net
-            cmd = f'chcp 65001 > nul 2>&1 && "{q}" {flag} < "{p}"'
-            try:
-                r = subprocess.run(
-                    ["cmd.exe", "/c", cmd],
-                    capture_output=True, env=env, timeout=timeout,
-                )
-                out = _decode_output(r.stdout)
-                if out:
-                    return out
-            except (OSError, subprocess.SubprocessError):
-                continue
-
-        # ── Strategy 4: PowerShell — pass paths via env vars (no quoting) ─────
-        env4 = env.copy()
-        env4["_CC_EXE"]    = claude_exe
-        env4["_CC_PROMPT"] = prompt_path
-
-        for flag in ("-p", "--print"):
-            ps = (
-                f'Get-Content -Raw -Encoding UTF8 $env:_CC_PROMPT '
-                f'| & $env:_CC_EXE {flag}'
+    # ── Primary: native .EXE — prompt as direct argument ─────────────────────
+    if not is_cmd_script:
+        try:
+            r = subprocess.run(
+                [claude_exe] + flags + [prompt],
+                capture_output=True,
+                env=env,
+                timeout=timeout,
+                cwd=home_dir,
             )
-            try:
-                r = subprocess.run(
-                    ["powershell.exe", "-NoProfile", "-NonInteractive",
-                     "-Command", ps],
-                    capture_output=True, env=env4, timeout=timeout,
-                )
-                out = _decode_output(r.stdout)
-                if out:
-                    return out
-            except (OSError, subprocess.SubprocessError):
-                continue
+            out = _decode_output(r.stdout)
+            if out:
+                return out
+            err = _decode_output(r.stderr) or _decode_output(r.stdout) or "(응답 없음)"
+            raise RuntimeError(f"Claude CLI 오류:\n{err}")
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"Claude CLI 응답 시간 초과 ({timeout // 60}분).\n"
+                "파일 내용이 너무 길거나 네트워크 문제일 수 있습니다."
+            )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"Claude CLI 실행 실패: {exc}") from exc
 
-    # ── Strategy 5: last resort — call trick + truncated arg ─────────────────
-    truncated = prompt[:5000]
+    # ── Fallback: .CMD wrapper via "call" trick ───────────────────────────────
+    # "call" as a separate token prevents cmd.exe's outer-quote-stripping
+    # that would break paths containing spaces.
     try:
         r = subprocess.run(
-            ["cmd.exe", "/c", "call", claude_exe, "-p", truncated],
-            capture_output=True, env=env, timeout=timeout,
+            ["cmd.exe", "/c", "call", claude_exe] + flags + [prompt],
+            capture_output=True,
+            env=env,
+            timeout=timeout,
+            cwd=home_dir,
         )
         out = _decode_output(r.stdout)
         if out:
             return out
-        err = _decode_output(r.stderr) or "(오류 정보 없음)"
+        err = _decode_output(r.stderr) or _decode_output(r.stdout) or "(응답 없음)"
         raise RuntimeError(f"Claude CLI 오류:\n{err}")
     except subprocess.TimeoutExpired:
-        raise
+        raise RuntimeError(
+            f"Claude CLI 응답 시간 초과 ({timeout // 60}분).\n"
+            "파일 내용이 너무 길거나 네트워크 문제일 수 있습니다."
+        )
     except RuntimeError:
         raise
     except Exception as exc:
