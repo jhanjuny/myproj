@@ -8,8 +8,10 @@ a = Analysis(
     ],
     hiddenimports=[
         'apps.rheed_monitor.capture.hikrobot',
+        'apps.rheed_monitor.capture.file_source',
+        'apps.rheed_monitor.detection.spot_detector',
         'PyQt5.QtCore', 'PyQt5.QtWidgets', 'PyQt5.QtGui',
-        'yaml',
+        'yaml', 'winreg',
     ],
     hookspath=[],
     runtime_hooks=[],

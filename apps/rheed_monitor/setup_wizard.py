@@ -15,8 +15,9 @@ import yaml
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFormLayout, QGroupBox, QLabel, QMessageBox, QPushButton,
-    QSpinBox, QTextEdit, QVBoxLayout, QHBoxLayout, QWidget,
+    QFileDialog, QFormLayout, QGroupBox, QLabel, QMessageBox,
+    QPushButton, QSpinBox, QLineEdit, QTextEdit, QVBoxLayout,
+    QHBoxLayout, QWidget,
 )
 
 
@@ -30,13 +31,43 @@ class SetupWizard(QDialog):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RHEED Monitor — 설정")
-        self.setMinimumWidth(420)
+        self.setMinimumWidth(480)
         self._cfg_path = _cfg_path()
         cfg = yaml.safe_load(self._cfg_path.read_text(encoding="utf-8")) if self._cfg_path.exists() else {}
 
         layout = QVBoxLayout(self)
 
-        # ── 카메라 설정 ──
+        # ── MVS SDK 경로 ──────────────────────────────────────────────────
+        mvs_box = QGroupBox("HIKROBOT MVS SDK 경로 (자동 탐색 실패 시 수동 지정)")
+        mvs_layout = QVBoxLayout(mvs_box)
+        mvs_layout.addWidget(QLabel(
+            "MVS 설치 후 자동으로 탐색합니다.\n"
+            "찾지 못할 경우 MvCameraControl_class.py 가 있는 폴더를 직접 지정하세요."
+        ))
+
+        path_row = QHBoxLayout()
+        self._mvs_path_edit = QLineEdit()
+        self._mvs_path_edit.setPlaceholderText("예) C:\\Program Files\\MVS\\Development\\Samples\\Python\\MvImport")
+        self._mvs_path_edit.setText(cfg.get("mvs_sdk_path", ""))
+        path_row.addWidget(self._mvs_path_edit, stretch=1)
+
+        browse_btn = QPushButton("찾아보기...")
+        browse_btn.clicked.connect(self._browse_mvs)
+        path_row.addWidget(browse_btn)
+        mvs_layout.addLayout(path_row)
+
+        # 자동 탐색 결과 표시
+        self._mvs_status = QLabel("탐색 결과: 미실행")
+        self._mvs_status.setWordWrap(True)
+        mvs_layout.addWidget(self._mvs_status)
+
+        test_btn = QPushButton("MVS 탐색 / 카메라 감지 테스트")
+        test_btn.clicked.connect(self._test_camera)
+        mvs_layout.addWidget(test_btn)
+
+        layout.addWidget(mvs_box)
+
+        # ── 카메라 설정 ──────────────────────────────────────────────────
         cam_box = QGroupBox("카메라 (HIKROBOT GigE)")
         cam_form = QFormLayout(cam_box)
 
@@ -58,7 +89,7 @@ class SetupWizard(QDialog):
 
         layout.addWidget(cam_box)
 
-        # ── 스팟 검출 설정 ──
+        # ── 스팟 검출 설정 ───────────────────────────────────────────────
         det_box = QGroupBox("스팟 검출")
         det_form = QFormLayout(det_box)
 
@@ -81,7 +112,22 @@ class SetupWizard(QDialog):
 
         layout.addWidget(det_box)
 
-        # ── 녹화 설정 ──
+        # ── ROI 설정 ─────────────────────────────────────────────────────
+        roi_box = QGroupBox("ROI 설정 (RHEED 진동 측정)")
+        roi_form = QFormLayout(roi_box)
+
+        self._roi_size = QSpinBox()
+        self._roi_size.setRange(5, 200); self._roi_size.setSingleStep(5)
+        self._roi_size.setSuffix(" px")
+        self._roi_size.setValue(cfg.get("roi_size_px", 40))
+        roi_form.addRow("ROI 반변 크기 (중심±px):", self._roi_size)
+        roi_form.addRow(QLabel(
+            "비디오 화면을 클릭하면 ROI 중심 설정, 스팟 자동 추적\n"
+            "ROI 내 녹색 채널 평균 강도 → RHEED 진동 신호"
+        ))
+        layout.addWidget(roi_box)
+
+        # ── 녹화 설정 ────────────────────────────────────────────────────
         rec_box = QGroupBox("녹화 / 스크린샷")
         rec_form = QFormLayout(rec_box)
 
@@ -99,34 +145,51 @@ class SetupWizard(QDialog):
 
         layout.addWidget(rec_box)
 
-        # ── 카메라 감지 테스트 ──
-        self._detect_btn = QPushButton("카메라 감지 테스트")
-        self._detect_btn.clicked.connect(self._test_camera)
-        layout.addWidget(self._detect_btn)
-
-        self._detect_result = QLabel("")
-        self._detect_result.setWordWrap(True)
-        layout.addWidget(self._detect_result)
-
-        # ── 저장 버튼 ──
+        # ── 저장 버튼 ────────────────────────────────────────────────────
         btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         btns.accepted.connect(self._save)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
+    def _browse_mvs(self):
+        folder = QFileDialog.getExistingDirectory(
+            self, "MvCameraControl_class.py 가 있는 폴더 선택"
+        )
+        if folder:
+            self._mvs_path_edit.setText(folder)
+
     def _test_camera(self):
-        try:
-            from apps.rheed_monitor.capture.hikrobot import list_devices, mvs_available
-            if not mvs_available():
-                self._detect_result.setText("MVS SDK 없음. MVS를 설치하세요.")
+        # 수동 경로가 있으면 먼저 적용
+        manual = self._mvs_path_edit.text().strip()
+        if manual:
+            from apps.rheed_monitor.capture.hikrobot import set_mvs_path
+            ok = set_mvs_path(manual)
+            if ok:
+                self._mvs_status.setText(f"✅ MVS SDK 로드 성공:\n{manual}")
+            else:
+                self._mvs_status.setText(f"❌ 지정 경로에서 SDK 로드 실패:\n{manual}")
                 return
+
+        try:
+            from apps.rheed_monitor.capture.hikrobot import (
+                list_devices, mvs_available, mvs_error_message, _mvs_path_found
+            )
+            if not mvs_available():
+                self._mvs_status.setText(
+                    "❌ MVS SDK 없음\n" + mvs_error_message()
+                )
+                return
+            self._mvs_status.setText(f"✅ MVS SDK 위치:\n{_mvs_path_found}")
             devs = list_devices()
-            self._detect_result.setText("\n".join(devs) if devs else "카메라 없음")
+            result = "\n".join(devs) if devs else "카메라 없음"
+            QMessageBox.information(self, "카메라 감지", result)
         except Exception as e:
-            self._detect_result.setText(f"오류: {e}")
+            self._mvs_status.setText(f"오류: {e}")
 
     def _save(self):
+        mvs_path = self._mvs_path_edit.text().strip()
         cfg = {
+            "mvs_sdk_path": mvs_path,
             "camera": {
                 "device_index": self._device_index.value(),
                 "exposure_us": self._exposure.value(),
@@ -140,6 +203,7 @@ class SetupWizard(QDialog):
                 "max_spots": 10,
                 "blur_ksize": 5,
             },
+            "roi_size_px": self._roi_size.value(),
             "screenshot_interval_sec": self._ss_interval.value(),
             "video_fps": self._fps.value(),
             "video_codec": "mp4v",

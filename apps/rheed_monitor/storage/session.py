@@ -47,9 +47,10 @@ class Session:
         # CSV
         self._csv_path = self.run_dir / "spot_data.csv"
         with self._csv_path.open("w", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(
-                ["timestamp", "spot_count", "x", "y", "brightness", "area", "is_broad"]
-            )
+            csv.writer(f).writerow([
+                "timestamp", "spot_count", "x", "y", "brightness", "area", "is_broad",
+                "roi_cx", "roi_cy", "roi_mean_intensity", "roi_sum_intensity",
+            ])
 
         # log
         self._log_path = self.run_dir / "session.log"
@@ -93,15 +94,24 @@ class Session:
         return path
 
     # ── CSV 기록 ──────────────────────────────────────────────────────────────
-    def record_spots(self, spots) -> None:
-        """spots: List[SpotResult] (없으면 빈 리스트)"""
+    def record_spots(self, spots, roi=None) -> None:
+        """
+        spots: List[SpotResult], roi: Optional[RoiData]
+        CSV 컬럼: timestamp, spot_count, x, y, brightness, area, is_broad,
+                  roi_cx, roi_cy, roi_mean_intensity, roi_sum_intensity
+        """
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        roi_cx    = f"{roi.cx:.2f}"          if roi else ""
+        roi_cy    = f"{roi.cy:.2f}"          if roi else ""
+        roi_mean  = f"{roi.mean_intensity:.2f}" if roi else ""
+        roi_sum   = f"{roi.sum_intensity:.0f}"  if roi else ""
+
         with self._csv_path.open("a", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             if not spots:
-                w.writerow([ts, 0, "", "", "", "", ""])
+                w.writerow([ts, 0, "", "", "", "", "",
+                            roi_cx, roi_cy, roi_mean, roi_sum])
             else:
-                # 주 스팟(가장 밝은 것)만 기록 (여러 개면 첫 행에 count 표시)
                 for i, s in enumerate(spots):
                     w.writerow([
                         ts if i == 0 else "",
@@ -109,6 +119,10 @@ class Session:
                         f"{s.x:.2f}", f"{s.y:.2f}",
                         f"{s.brightness:.2f}", s.area,
                         "broad" if s.is_broad else "dot",
+                        roi_cx if i == 0 else "",
+                        roi_cy if i == 0 else "",
+                        roi_mean if i == 0 else "",
+                        roi_sum  if i == 0 else "",
                     ])
 
     # ── 세션 종료 + 압축 ──────────────────────────────────────────────────────

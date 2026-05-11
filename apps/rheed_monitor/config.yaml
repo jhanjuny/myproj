@@ -1,20 +1,26 @@
 
 # RHEED Monitor 설정
 
+# MVS SDK 경로 (자동 탐색 실패 시 RheedSetup에서 수동 지정 후 저장됨)
+mvs_sdk_path: ""
+
 camera:
   device_index: 0           # 카메라 인덱스 (0 = 첫 번째 발견된 카메라)
-  exposure_us: 10000.0      # 노출 시간 (마이크로초) — 카메라에 맞게 조정
+  exposure_us: 10000.0      # 노출 시간 (마이크로초)
   gain_db: 0.0              # 게인 (dB)
 
 detector:
-  threshold_percentile: 95.0   # 밝기 상위 몇 % 이상을 스팟으로 볼지
-  min_brightness: 20.0         # 이 값 미만이면 스팟 없음 (0~255)
-  min_area: 4                  # 최소 스팟 픽셀 면적
-  broad_area_threshold: 500    # 이 면적 이상이면 broad 패턴으로 분류
-  max_spots: 10                # 최대 검출 스팟 수
-  blur_ksize: 5                # Gaussian blur 커널 크기 (홀수)
+  threshold_fraction: 0.5   # max 밝기의 이 비율 이상을 스팟으로 판정
+  min_brightness: 20.0      # 이 값 미만이면 스팟 없음 (0~255)
+  min_area: 4               # 최소 스팟 픽셀 면적
+  broad_area_threshold: 500 # 이 면적 이상이면 broad 패턴으로 분류
+  max_spots: 10             # 최대 검출 스팟 수
+  blur_ksize: 5             # Gaussian blur 커널 크기 (홀수)
 
-screenshot_interval_sec: 30    # 자동 스크린샷 주기 (초) — UI에서 변경 가능
+# ROI 적분 강도 설정 (RHEED 진동 측정 핵심)
+# 스팟 주변 ±roi_size_px 영역의 녹색 채널 평균값을 진동 신호로 기록
+roi_size_px: 40             # ROI 반변 길이 (실제 박스 = 80×80 px)
 
-video_fps: 15                  # 녹화 영상 FPS
-video_codec: mp4v              # 영상 코덱 (mp4v 또는 XVID)
+screenshot_interval_sec: 30 # 자동 스크린샷 주기 (초)
+video_fps: 15               # 녹화 영상 FPS
+video_codec: mp4v           # 영상 코덱 (mp4v 또는 XVID)

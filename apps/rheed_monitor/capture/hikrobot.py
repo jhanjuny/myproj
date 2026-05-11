@@ -2,75 +2,247 @@
 """
 HIKROBOT GigE 카메라 소스 (MVS SDK ctypes 래퍼)
 
-사전 조건:
-  1. HIKROBOT MVS 소프트웨어 설치
-     https://www.hikrobotics.com → 다운로드 → Machine Vision → MVS
-     (설치 시 GigE 필터 드라이버 + Python SDK 자동 포함)
-  2. 카메라 연결 NIC에 Jumbo Frame 활성화 (MTU=9000 권장)
-  3. 카메라와 PC가 같은 서브넷이거나, MVS IP 할당 완료 상태
+MVS SDK 탐색 우선순위:
+  1. 환경변수  HIKROBOT_MVS_PATH
+  2. 설정 파일 rheed_config.yaml의 mvs_sdk_path 항목
+  3. Windows 레지스트리 (HIKROBOT 설치 정보)
+  4. 표준 설치 경로 후보 목록 (여러 드라이브/경로)
 
-MVS Python SDK 경로 (설치 후 자동 탐색):
-  C:\Program Files (x86)\MVS\Development\Samples\Python\MvImport
+수동 경로 지정:
+  set_mvs_path("C:\\YourPath\\MvImport") 를 호출한 뒤 import
+  또는 HIKROBOT_MVS_PATH 환경변수 설정 후 재시작
 """
 
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 from ctypes import cast, POINTER, memmove
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 import cv2
 import numpy as np
 
-# ── MVS SDK 경로 자동 탐색 ──────────────────────────────────────────────────
-_MVS_CANDIDATE_PATHS = [
+
+# ── MVS SDK 경로 탐색 ──────────────────────────────────────────────────────
+
+_MVS_CANDIDATE_PATHS: List[str] = [
+    # Program Files (x86) — 32-bit 설치
     r"C:\Program Files (x86)\MVS\Development\Samples\Python\MvImport",
+    r"C:\Program Files (x86)\HIKRobot\MVS\Development\Samples\Python\MvImport",
+    r"C:\Program Files (x86)\Hikrobot\MVS\Development\Samples\Python\MvImport",
+    # Program Files — 64-bit 설치
     r"C:\Program Files\MVS\Development\Samples\Python\MvImport",
     r"C:\Program Files\HIKRobot\MVS\Development\Samples\Python\MvImport",
+    r"C:\Program Files\Hikrobot\MVS\Development\Samples\Python\MvImport",
+    # D 드라이브
     r"D:\MVS\Development\Samples\Python\MvImport",
+    r"D:\HIKRobot\MVS\Development\Samples\Python\MvImport",
+    r"D:\Program Files\MVS\Development\Samples\Python\MvImport",
+    r"D:\Program Files (x86)\MVS\Development\Samples\Python\MvImport",
+    # E 드라이브
+    r"E:\MVS\Development\Samples\Python\MvImport",
+    r"E:\HIKRobot\MVS\Development\Samples\Python\MvImport",
 ]
 
-_mvs_available = False
-for _p in _MVS_CANDIDATE_PATHS:
-    if Path(_p).exists():
-        if _p not in sys.path:
-            sys.path.insert(0, _p)
-        _mvs_available = True
-        break
 
-_MVS_IMPORT_ERROR: Optional[str] = None
-if _mvs_available:
+def _find_via_registry() -> Optional[str]:
+    """Windows 레지스트리에서 MVS 설치 경로를 탐색."""
     try:
-        from MvCameraControl_class import (  # type: ignore
-            MvCamera,
-            MV_CC_DEVICE_INFO_LIST,
-            MV_CC_DEVICE_INFO,
-            MV_FRAME_OUT,
-            MV_GIGE_DEVICE,
-            MV_ACCESS_Exclusive,
+        import winreg
+        key_paths = [
+            r"SOFTWARE\Hikrobot\MVS",
+            r"SOFTWARE\HIKRobot\MVS",
+            r"SOFTWARE\WOW6432Node\Hikrobot\MVS",
+            r"SOFTWARE\WOW6432Node\HIKRobot\MVS",
+            r"SOFTWARE\HIKROBOT\MVS",
+            r"SOFTWARE\WOW6432Node\HIKROBOT\MVS",
+        ]
+        value_names = ["InstallPath", "installpath", "Path", "Install"]
+        for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+            for key_path in key_paths:
+                try:
+                    with winreg.OpenKey(hive, key_path) as key:
+                        for vname in value_names:
+                            try:
+                                install_dir, _ = winreg.QueryValueEx(key, vname)
+                                candidate = Path(install_dir) / "Development/Samples/Python/MvImport"
+                                if candidate.exists():
+                                    return str(candidate)
+                                # MvCameraControl_class.py 직접 탐색
+                                for p in Path(install_dir).rglob("MvCameraControl_class.py"):
+                                    return str(p.parent)
+                            except (FileNotFoundError, OSError):
+                                pass
+                except (FileNotFoundError, OSError):
+                    pass
+    except (ImportError, Exception):
+        pass
+    return None
+
+
+def _find_via_env() -> Optional[str]:
+    """환경변수 HIKROBOT_MVS_PATH에서 경로 탐색."""
+    p = os.environ.get("HIKROBOT_MVS_PATH", "").strip()
+    if p and Path(p).exists():
+        return p
+    return None
+
+
+def _find_via_config() -> Optional[str]:
+    """rheed_config.yaml 또는 config.yaml에서 mvs_sdk_path 탐색."""
+    try:
+        import yaml
+        cfg_candidates = []
+        if getattr(sys, "frozen", False):
+            cfg_candidates.append(Path(sys.executable).parent / "rheed_config.yaml")
+        else:
+            cfg_candidates.append(Path(__file__).parents[3] / "apps/rheed_monitor/config.yaml")
+            cfg_candidates.append(Path(__file__).parents[3] / "rheed_config.yaml")
+
+        for cfg_path in cfg_candidates:
+            if cfg_path.exists():
+                cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+                p = cfg.get("mvs_sdk_path", "").strip()
+                if p and Path(p).exists():
+                    return p
+    except Exception:
+        pass
+    return None
+
+
+def _find_all_drives_glob() -> Optional[str]:
+    """모든 드라이브에서 MvCameraControl_class.py 위치 탐색 (느리므로 마지막 수단)."""
+    import subprocess
+    try:
+        # wmic logical disk로 드라이브 목록 가져오기
+        result = subprocess.run(
+            ["wmic", "logicaldisk", "get", "caption"],
+            capture_output=True, text=True, timeout=5
         )
-        # 픽셀 타입 상수 (모노 판단용)
-        _MONO8 = 0x01080001
+        drives = [line.strip() for line in result.stdout.splitlines()
+                  if line.strip() and ":" in line and line.strip() != "Caption"]
+        for drive in drives:
+            # Hikrobot 디렉토리만 탐색 (전체 탐색은 너무 느림)
+            for top_dir in ["Hikrobot", "HIKRobot", "HIKROBOT", "MVS"]:
+                candidate_root = Path(drive) / "Program Files" / top_dir
+                if candidate_root.exists():
+                    for p in candidate_root.rglob("MvCameraControl_class.py"):
+                        return str(p.parent)
+                candidate_root2 = Path(drive) / "Program Files (x86)" / top_dir
+                if candidate_root2.exists():
+                    for p in candidate_root2.rglob("MvCameraControl_class.py"):
+                        return str(p.parent)
+    except Exception:
+        pass
+    return None
+
+
+# ── 경로 탐색 실행 ──────────────────────────────────────────────────────────
+
+_mvs_available = False
+_mvs_path_found: Optional[str] = None
+_MVS_IMPORT_ERROR: Optional[str] = None
+_all_searched: List[str] = []
+
+
+def _try_load_mvs(path: str) -> bool:
+    global _mvs_available, _mvs_path_found, _MVS_IMPORT_ERROR
+    if path not in sys.path:
+        sys.path.insert(0, path)
+    try:
+        from MvCameraControl_class import (  # type: ignore  # noqa: F401
+            MvCamera, MV_CC_DEVICE_INFO_LIST, MV_CC_DEVICE_INFO,
+            MV_FRAME_OUT, MV_GIGE_DEVICE, MV_ACCESS_Exclusive,
+        )
+        _mvs_available = True
+        _mvs_path_found = path
+        return True
     except Exception as e:
-        _mvs_available = False
         _MVS_IMPORT_ERROR = str(e)
-else:
+        return False
+
+
+def _init_mvs() -> None:
+    global _MVS_IMPORT_ERROR, _all_searched
+
+    # 1. 환경변수
+    p = _find_via_env()
+    if p:
+        _all_searched.append(f"[ENV] {p}")
+        if _try_load_mvs(p):
+            return
+
+    # 2. 설정 파일
+    p = _find_via_config()
+    if p:
+        _all_searched.append(f"[CFG] {p}")
+        if _try_load_mvs(p):
+            return
+
+    # 3. 레지스트리
+    p = _find_via_registry()
+    if p:
+        _all_searched.append(f"[REG] {p}")
+        if _try_load_mvs(p):
+            return
+
+    # 4. 표준 경로 후보
+    for cp in _MVS_CANDIDATE_PATHS:
+        _all_searched.append(cp)
+        if Path(cp).exists():
+            if _try_load_mvs(cp):
+                return
+
+    # 5. 드라이브 전체 탐색 (마지막 수단)
+    p = _find_all_drives_glob()
+    if p:
+        _all_searched.append(f"[GLOB] {p}")
+        if _try_load_mvs(p):
+            return
+
     _MVS_IMPORT_ERROR = (
-        "MVS SDK not found. Install HIKROBOT MVS and restart.\n"
-        f"Expected: {_MVS_CANDIDATE_PATHS[0]}"
+        "MVS SDK(MvCameraControl_class.py)를 찾을 수 없습니다.\n"
+        "해결 방법:\n"
+        "  1. HIKROBOT MVS 소프트웨어 설치 후 재시작\n"
+        "     https://www.hikrobotics.com → 머신비전 → MVS\n"
+        "  2. 또는 RheedSetup.exe → 'MVS SDK 경로' 항목에\n"
+        "     MvCameraControl_class.py 위치를 직접 입력\n"
+        "  3. 또는 환경변수 HIKROBOT_MVS_PATH 설정 후 재시작\n"
+        f"\n탐색한 경로 ({len(_all_searched)}개):\n" +
+        "\n".join(f"  - {s}" for s in _all_searched[:15])
     )
+
+
+_init_mvs()
+
+
+def set_mvs_path(path: str) -> bool:
+    """
+    MVS SDK 경로를 런타임에 지정합니다. (setup_wizard 또는 main.py에서 호출)
+    Returns True if MVS module loaded successfully.
+    """
+    global _mvs_available, _mvs_path_found
+    if _mvs_available:
+        return True
+    return _try_load_mvs(path)
 
 
 def mvs_available() -> bool:
     return _mvs_available
 
 
+def mvs_error_message() -> str:
+    return _MVS_IMPORT_ERROR or ""
+
+
 def list_devices() -> list[str]:
     """검색된 GigE 카메라 목록 반환 (UI 표시용)."""
     if not _mvs_available:
         return [f"[MVS 없음] {_MVS_IMPORT_ERROR}"]
+    from MvCameraControl_class import MvCamera, MV_CC_DEVICE_INFO_LIST, MV_CC_DEVICE_INFO, MV_GIGE_DEVICE  # type: ignore
     device_list = MV_CC_DEVICE_INFO_LIST()
     MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE, device_list)
     infos: list[str] = []
@@ -108,16 +280,29 @@ class HikrobotCamera:
         if not _mvs_available:
             raise RuntimeError(_MVS_IMPORT_ERROR)
 
+        from MvCameraControl_class import (  # type: ignore
+            MvCamera, MV_CC_DEVICE_INFO_LIST, MV_CC_DEVICE_INFO,
+            MV_GIGE_DEVICE, MV_ACCESS_Exclusive,
+        )
+        self._MvCamera = MvCamera
+        self._MV_CC_DEVICE_INFO_LIST = MV_CC_DEVICE_INFO_LIST
+        self._MV_CC_DEVICE_INFO = MV_CC_DEVICE_INFO
+        self._MV_GIGE_DEVICE = MV_GIGE_DEVICE
+        self._MV_ACCESS_Exclusive = MV_ACCESS_Exclusive
+
         self._cam: Optional[MvCamera] = None
         self._device_index = device_index
         self._exposure_us = exposure_us
         self._gain_db = gain_db
+        self._MONO8 = 0x01080001
         self._open()
 
-    # ── 내부 초기화 ─────────────────────────────────────────────────────────
     def _open(self) -> None:
-        device_list = MV_CC_DEVICE_INFO_LIST()
-        ret = MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE, device_list)
+        from MvCameraControl_class import MV_FRAME_OUT  # type: ignore
+        self._MV_FRAME_OUT = MV_FRAME_OUT
+
+        device_list = self._MV_CC_DEVICE_INFO_LIST()
+        ret = self._MvCamera.MV_CC_EnumDevices(self._MV_GIGE_DEVICE, device_list)
         self._check(ret, "MV_CC_EnumDevices")
 
         n = device_list.nDeviceNum
@@ -126,17 +311,16 @@ class HikrobotCamera:
         if self._device_index >= n:
             raise RuntimeError(f"device_index={self._device_index} 초과 (발견={n})")
 
-        cam = MvCamera()
+        cam = self._MvCamera()
         st = cast(device_list.pDeviceInfo[self._device_index],
-                  POINTER(MV_CC_DEVICE_INFO)).contents
+                  POINTER(self._MV_CC_DEVICE_INFO)).contents
         self._check(cam.MV_CC_CreateHandle(st), "MV_CC_CreateHandle")
-        self._check(cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0), "MV_CC_OpenDevice")
+        self._check(cam.MV_CC_OpenDevice(self._MV_ACCESS_Exclusive, 0), "MV_CC_OpenDevice")
 
-        cam.MV_CC_SetEnumValue("TriggerMode", 0)            # 연속 취득
+        cam.MV_CC_SetEnumValue("TriggerMode", 0)
         cam.MV_CC_SetFloatValue("ExposureTime", self._exposure_us)
         cam.MV_CC_SetFloatValue("Gain", self._gain_db)
-        cam.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", False)  # 최대 FPS
-
+        cam.MV_CC_SetBoolValue("AcquisitionFrameRateEnable", False)
         self._check(cam.MV_CC_StartGrabbing(), "MV_CC_StartGrabbing")
         self._cam = cam
 
@@ -145,16 +329,13 @@ class HikrobotCamera:
         if ret != 0:
             raise RuntimeError(f"{name} 실패: 0x{ret:08X}")
 
-    # ── 프레임 읽기 ─────────────────────────────────────────────────────────
     def read(self) -> Optional[np.ndarray]:
         if self._cam is None:
             return None
-
-        st_frame = MV_FRAME_OUT()
-        ret = self._cam.MV_CC_GetImageBuffer(st_frame, 1000)  # timeout 1s
+        st_frame = self._MV_FRAME_OUT()
+        ret = self._cam.MV_CC_GetImageBuffer(st_frame, 1000)
         if ret != 0:
             return None
-
         try:
             w = st_frame.stFrameInfo.nWidth
             h = st_frame.stFrameInfo.nHeight
@@ -165,16 +346,13 @@ class HikrobotCamera:
             memmove(buf, st_frame.pBufAddr, n_bytes)
             data = np.frombuffer(buf, dtype=np.uint8)
 
-            if pixel_type == _MONO8:
-                # 모노 → 3채널 BGR
+            if pixel_type == self._MONO8:
                 gray = data[: w * h].reshape(h, w)
                 frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
             elif n_bytes >= w * h * 3:
-                # RGB8 packed
                 frame = data[: w * h * 3].reshape(h, w, 3)
                 frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
             else:
-                # Bayer (BayerBG8 기본 가정 — 카메라 설정에 따라 조정)
                 bayer = data[: w * h].reshape(h, w)
                 frame = cv2.cvtColor(bayer, cv2.COLOR_BayerBG2BGR)
 
@@ -182,7 +360,6 @@ class HikrobotCamera:
         finally:
             self._cam.MV_CC_FreeImageBuffer(st_frame)
 
-    # ── 설정 변경 ────────────────────────────────────────────────────────────
     def set_exposure(self, us: float) -> None:
         if self._cam:
             self._cam.MV_CC_SetFloatValue("ExposureTime", us)
@@ -191,7 +368,6 @@ class HikrobotCamera:
         if self._cam:
             self._cam.MV_CC_SetFloatValue("Gain", db)
 
-    # ── 해제 ─────────────────────────────────────────────────────────────────
     def release(self) -> None:
         if self._cam:
             self._cam.MV_CC_StopGrabbing()
