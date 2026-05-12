@@ -5,3 +5,4 @@ study_notes_app/
 apps/rheed_monitor/
 RheedMonitor.spec
 RheedSetup.spec
+rthook_pil.py
