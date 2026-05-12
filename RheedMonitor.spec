@@ -1,40 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
-import glob
-from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_all
 
-# ── PIL(Pillow) / matplotlib 전체 수집 ──────────────────────────────────────
+# PIL(Pillow 12+ pip wheel) — DLL 정적 내장, 별도 수집 불필요
+# collect_all로 pyd + py 모두 수집
 pil_datas,  pil_binaries,  pil_hidden  = collect_all('PIL')
 mpl_datas,  mpl_binaries,  mpl_hidden  = collect_all('matplotlib')
 
-# ── conda Library\bin 에서 Pillow 의존 DLL 명시적 번들 ──────────────────────
-# conda 환경 경로 (빌드 머신 고정)
-_CONDA_BIN = r'D:\conda_envs\torch\Library\bin'
-
-_PIL_DLL_NAMES = [
-    'libjpeg*.dll',
-    'openjp2*.dll',
-    'libtiff*.dll',
-    'libpng*.dll',
-    'zlib*.dll',
-    'lcms2*.dll',
-    'libwebp*.dll',
-    'libwebpdecoder*.dll',
-    'libwebpdemux*.dll',
-    'libwebpmux*.dll',
-    'freetype*.dll',
-]
-
-extra_binaries = []
-for pattern in _PIL_DLL_NAMES:
-    for dll_path in glob.glob(os.path.join(_CONDA_BIN, pattern)):
-        extra_binaries.append((dll_path, '.'))   # '.' = EXE와 같은 디렉토리
-
-# ────────────────────────────────────────────────────────────────────────────
 a = Analysis(
     ['apps/rheed_monitor/main.py'],
     pathex=['.'],
-    binaries=extra_binaries + pil_binaries + mpl_binaries,
+    binaries=pil_binaries + mpl_binaries,
     datas=[
         ('apps/rheed_monitor/config.yaml', 'apps/rheed_monitor'),
     ] + pil_datas + mpl_datas,
@@ -51,7 +27,7 @@ a = Analysis(
         'PIL', 'PIL.Image', 'PIL._imaging',
     ] + pil_hidden + mpl_hidden,
     hookspath=[],
-    runtime_hooks=[os.path.join(SPECPATH, 'rthook_pil.py')],
+    runtime_hooks=[],
     excludes=[],
     noarchive=False,
 )
@@ -61,6 +37,6 @@ exe = EXE(
     name='RheedMonitor',
     debug=False,
     strip=False,
-    upx=False,   # UPX가 DLL 압축 시 로드 실패 유발 가능 → 비활성화
+    upx=False,
     console=False,
 )
