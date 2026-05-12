@@ -32,7 +32,7 @@ a = Analysis(
         'PIL', 'PIL.Image', 'PIL._imaging',
     ] + pil_hidden,
     hookspath=[],
-    runtime_hooks=['rthook_pil.py'],
+    runtime_hooks=[os.path.join(SPECPATH, 'rthook_pil.py')],
     excludes=[],
     noarchive=False,
 )
