@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_all, collect_dynamic_libs
+
+# PIL(Pillow) 전체 수집 - _imaging DLL 포함
+pil_datas, pil_binaries, pil_hidden = collect_all('PIL')
+# matplotlib 전체 수집 - backends, fonts 포함
+mpl_datas, mpl_binaries, mpl_hidden = collect_all('matplotlib')
+
 a = Analysis(
     ['apps/rheed_monitor/main.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=pil_binaries + mpl_binaries + collect_dynamic_libs('PIL'),
     datas=[
         ('apps/rheed_monitor/config.yaml', 'apps/rheed_monitor'),
-    ],
+    ] + pil_datas + mpl_datas,
     hiddenimports=[
         'apps.rheed_monitor.capture.hikrobot',
         'apps.rheed_monitor.capture.file_source',
@@ -16,7 +23,8 @@ a = Analysis(
         'matplotlib.backends.backend_qt5agg',
         'matplotlib.figure',
         'cv2', 'yaml', 'winreg',
-    ],
+        'PIL', 'PIL.Image', 'PIL._imaging',
+    ] + pil_hidden + mpl_hidden,
     hookspath=[],
     runtime_hooks=[],
     excludes=[],
