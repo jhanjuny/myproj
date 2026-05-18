@@ -148,8 +148,60 @@ _MVS_IMPORT_ERROR: Optional[str] = None
 _all_searched: List[str] = []
 
 
+def _add_mvs_runtime_to_path(mvs_import_path: str) -> None:
+    """
+    MvImport 경로에서 MVS 루트를 역산해 Runtime DLL 디렉토리를 PATH에 추가.
+
+    MVS 설치 구조:
+        [MVS_ROOT]\Development\Samples\Python\MvImport\  ← mvs_import_path
+        [MVS_ROOT]\Runtime\Win64_x64\MvCameraControl.dll ← 여기가 필요
+
+    MvCameraControl_class.py는 ctypes로 MvCameraControl.dll을 로드하므로
+    Runtime 디렉토리가 PATH 또는 add_dll_directory에 없으면 ImportError 발생.
+    """
+    p = Path(mvs_import_path)
+    # MvImport → Python → Samples → Development → [MVS_ROOT]
+    candidates = [
+        p.parents[3],   # MvImport/Python/Samples/Development → 4단계 위 = MVS_ROOT (표준)
+        p.parents[4],   # 혹시 한 단계 더 위
+    ]
+    runtime_subdirs = [
+        "Runtime/Win64_x64",
+        "Runtime/Win32_i86",
+        "Runtime",
+        "bin",
+        "lib",
+    ]
+    added = []
+    for root in candidates:
+        for sub in runtime_subdirs:
+            dll_dir = root / sub
+            if dll_dir.exists():
+                s = str(dll_dir)
+                if s not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = s + os.pathsep + os.environ.get("PATH", "")
+                try:
+                    os.add_dll_directory(s)
+                except (AttributeError, OSError):
+                    pass
+                added.append(s)
+
+    # MvImport 디렉토리 자체도 추가 (일부 버전은 여기에 DLL 포함)
+    s = str(p)
+    if s not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = s + os.pathsep + os.environ.get("PATH", "")
+    try:
+        os.add_dll_directory(s)
+    except (AttributeError, OSError):
+        pass
+
+
 def _try_load_mvs(path: str) -> bool:
     global _mvs_available, _mvs_path_found, _MVS_IMPORT_ERROR
+
+    # MvCameraControl.dll을 찾을 수 있도록 Runtime 경로 먼저 PATH에 추가
+    _add_mvs_runtime_to_path(path)
+
     if path not in sys.path:
         sys.path.insert(0, path)
     try:
@@ -161,7 +213,8 @@ def _try_load_mvs(path: str) -> bool:
         _mvs_path_found = path
         return True
     except Exception as e:
-        _MVS_IMPORT_ERROR = str(e)
+        import traceback
+        _MVS_IMPORT_ERROR = f"{e}\n\n[상세]\n{traceback.format_exc()}"
         return False
 
 

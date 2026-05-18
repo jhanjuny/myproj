@@ -162,12 +162,18 @@ class SetupWizard(QDialog):
         # 수동 경로가 있으면 먼저 적용
         manual = self._mvs_path_edit.text().strip()
         if manual:
-            from apps.rheed_monitor.capture.hikrobot import set_mvs_path
+            from apps.rheed_monitor.capture.hikrobot import set_mvs_path, mvs_error_message
             ok = set_mvs_path(manual)
             if ok:
                 self._mvs_status.setText(f"✅ MVS SDK 로드 성공:\n{manual}")
             else:
-                self._mvs_status.setText(f"❌ 지정 경로에서 SDK 로드 실패:\n{manual}")
+                # 실패 시 상세 에러 표시 (어떤 DLL이 없는지 확인용)
+                err = mvs_error_message()
+                self._mvs_status.setText(
+                    f"❌ SDK 로드 실패 (경로는 맞음, DLL 문제)\n"
+                    f"경로: {manual}\n\n"
+                    f"오류 내용:\n{err[:800]}"
+                )
                 return
 
         try:
