@@ -198,23 +198,29 @@ def _add_mvs_runtime_to_path(mvs_import_path: str) -> None:
 
 def _preload_mvs_dll(mvs_import_path: str) -> Optional[str]:
     """
-    MvCameraControl.dll을 ctypes로 직접 로드합니다 (전체 경로 사용).
+    MvCameraControl.dll을 ctypes로 직접 로드합니다 (전체 경로 + SetDllDirectoryW).
 
-    MvCameraControl_class.py는 모듈 로드 시 ctypes.CDLL('MvCameraControl.dll')을
-    이름만으로 호출합니다. PyInstaller 동결 EXE에서는 PATH 수정만으로는 부족할 수
-    있으므로, 미리 전체 경로로 DLL을 로드해 프로세스 DLL 캐시에 등록합니다.
+    핵심 문제:
+      MvCameraControl_class.py line 77 → ctypes.CDLL('MvCameraControl.dll') 이름으로만 호출
+      PyInstaller 동결 EXE에서 os.add_dll_directory / PATH 변경은
+      Windows의 plain LoadLibrary 경로 탐색에 반영되지 않음.
+
+    해결책:
+      kernel32.SetDllDirectoryW(runtime_dir) 를 호출하면 plain LoadLibrary도
+      해당 디렉토리에서 의존 DLL을 찾을 수 있음.
+      → 전체 경로로 WinDLL 로드 성공 → 프로세스 DLL 캐시 등록
+      → 이후 CDLL('MvCameraControl.dll') 이름만으로도 캐시에서 찾음.
 
     Returns: 로드 성공한 DLL 경로 또는 None
     """
     p = Path(mvs_import_path)
-    # MVS_ROOT = MvImport의 4단계 위 (Development/Samples/Python/MvImport)
     dll_names = ["MvCameraControl.dll", "MvCameraControl_d.dll"]
     search_roots = []
     if len(p.parents) > 3:
-        search_roots.append(p.parents[3])
+        search_roots.append(p.parents[3])   # MVS_ROOT (표준: 4단계 위)
     if len(p.parents) > 4:
-        search_roots.append(p.parents[4])
-    search_roots.append(p)  # MvImport 자체에 DLL이 있는 경우도 처리
+        search_roots.append(p.parents[4])   # 한 단계 더 위 (비표준 설치)
+    search_roots.append(p)                  # MvImport 자체
 
     runtime_subdirs = [
         "Runtime/Win64_x64",
@@ -223,19 +229,40 @@ def _preload_mvs_dll(mvs_import_path: str) -> Optional[str]:
         "Runtime",
         "bin",
         "lib",
-        "",  # root 자체
+        "",
     ]
+
+    try:
+        _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    except OSError:
+        _kernel32 = None
+
+    def _set_dll_dir(path_str: Optional[str]) -> None:
+        """SetDllDirectoryW로 plain LoadLibrary 탐색 경로 설정/복원."""
+        if _kernel32 is None:
+            return
+        try:
+            _kernel32.SetDllDirectoryW(path_str)
+        except Exception:
+            pass
+
     for root in search_roots:
         for sub in runtime_subdirs:
             check_dir = root / sub if sub else root
             for dll_name in dll_names:
                 dll_path = check_dir / dll_name
                 if dll_path.exists():
+                    # Runtime 디렉토리를 SetDllDirectoryW로 등록 →
+                    # MvCameraControl.dll 의존 DLL들이 여기서 탐색됨
+                    _set_dll_dir(str(check_dir))
                     try:
                         ctypes.WinDLL(str(dll_path))
+                        _set_dll_dir(None)   # 복원
                         return str(dll_path)
                     except OSError:
                         pass
+
+    _set_dll_dir(None)   # 복원
     return None
 
 
