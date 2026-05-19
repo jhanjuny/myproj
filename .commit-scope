@@ -8,3 +8,5 @@ RheedSetup.spec
 rthook_pil.py
 .gitignore
 CLAUDE.md
+apps/gmail_ai/credentials.json
+apps/shortform_factory/client_secret.json

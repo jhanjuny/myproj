@@ -43,6 +43,9 @@ build/
 
 # Secrets (DO NOT COMMIT)
 client_secret_*.json
+**/credentials.json
+**/credentials.txt
+**/client_secret.json
 
 # Claude Code internal
 .claude/
