@@ -196,11 +196,58 @@ def _add_mvs_runtime_to_path(mvs_import_path: str) -> None:
         pass
 
 
+def _preload_mvs_dll(mvs_import_path: str) -> Optional[str]:
+    """
+    MvCameraControl.dll을 ctypes로 직접 로드합니다 (전체 경로 사용).
+
+    MvCameraControl_class.py는 모듈 로드 시 ctypes.CDLL('MvCameraControl.dll')을
+    이름만으로 호출합니다. PyInstaller 동결 EXE에서는 PATH 수정만으로는 부족할 수
+    있으므로, 미리 전체 경로로 DLL을 로드해 프로세스 DLL 캐시에 등록합니다.
+
+    Returns: 로드 성공한 DLL 경로 또는 None
+    """
+    p = Path(mvs_import_path)
+    # MVS_ROOT = MvImport의 4단계 위 (Development/Samples/Python/MvImport)
+    dll_names = ["MvCameraControl.dll", "MvCameraControl_d.dll"]
+    search_roots = []
+    if len(p.parents) > 3:
+        search_roots.append(p.parents[3])
+    if len(p.parents) > 4:
+        search_roots.append(p.parents[4])
+    search_roots.append(p)  # MvImport 자체에 DLL이 있는 경우도 처리
+
+    runtime_subdirs = [
+        "Runtime/Win64_x64",
+        "Runtime/Win32_i86",
+        "Runtime/Win64",
+        "Runtime",
+        "bin",
+        "lib",
+        "",  # root 자체
+    ]
+    for root in search_roots:
+        for sub in runtime_subdirs:
+            check_dir = root / sub if sub else root
+            for dll_name in dll_names:
+                dll_path = check_dir / dll_name
+                if dll_path.exists():
+                    try:
+                        ctypes.WinDLL(str(dll_path))
+                        return str(dll_path)
+                    except OSError:
+                        pass
+    return None
+
+
 def _try_load_mvs(path: str) -> bool:
     global _mvs_available, _mvs_path_found, _MVS_IMPORT_ERROR
 
-    # MvCameraControl.dll을 찾을 수 있도록 Runtime 경로 먼저 PATH에 추가
+    # 1. Runtime DLL 디렉토리를 PATH / add_dll_directory에 추가
     _add_mvs_runtime_to_path(path)
+
+    # 2. MvCameraControl.dll을 전체 경로로 미리 로드
+    #    (PyInstaller 동결 EXE에서 ctypes.CDLL('MvCameraControl.dll')이 실패하는 문제 방지)
+    preloaded = _preload_mvs_dll(path)
 
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -214,7 +261,9 @@ def _try_load_mvs(path: str) -> bool:
         return True
     except Exception as e:
         import traceback
-        _MVS_IMPORT_ERROR = f"{e}\n\n[상세]\n{traceback.format_exc()}"
+        tb = traceback.format_exc()
+        preload_info = f"\n[DLL 사전 로드: {preloaded or '실패'}]"
+        _MVS_IMPORT_ERROR = f"{e}{preload_info}\n\n[상세]\n{tb}"
         return False
 
 
