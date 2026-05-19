@@ -17,7 +17,7 @@ outputs/
 *.pth
 *.pt
 
-# data (로컬/?�격 ?��?경로??repo 밖이 ?�상?�이지�? ?�시 repo ?�에 ??경우 방어)
+# data (로컬/?�격 ?��?경로??repo 밖이 ?�상?�이지�? ?�시 repo ?�에 ??경우 방어)
 data/
 data/**/processed/
 
@@ -36,3 +36,13 @@ Thumbs.db
 configs/paths.local.json
 
 proc.png
+
+# Build outputs (large binaries, rebuild from source)
+dist/
+build/
+
+# Secrets (DO NOT COMMIT)
+client_secret_*.json
+
+# Claude Code internal
+.claude/

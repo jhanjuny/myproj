@@ -6,3 +6,5 @@ apps/rheed_monitor/
 RheedMonitor.spec
 RheedSetup.spec
 rthook_pil.py
+.gitignore
+CLAUDE.md
