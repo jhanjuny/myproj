@@ -196,30 +196,65 @@ def _add_mvs_runtime_to_path(mvs_import_path: str) -> None:
         pass
 
 
-def _preload_mvs_dll(mvs_import_path: str) -> Optional[str]:
+def _winerror_hint(winerror: Optional[int]) -> str:
+    """Windows error code → 한국어 힌트."""
+    if winerror is None:
+        return "알 수 없음"
+    hints = {
+        126: "ERROR_MOD_NOT_FOUND — 의존 DLL 누락 (VC++ Redistributable 또는 MVS Runtime DLL)",
+        193: "ERROR_BAD_EXE_FORMAT — 아키텍처 mismatch (32-bit DLL ↔ 64-bit Python)",
+        5: "ERROR_ACCESS_DENIED — 권한 부족",
+        87: "ERROR_INVALID_PARAMETER — 잘못된 파라미터",
+        2: "ERROR_FILE_NOT_FOUND — 파일 없음",
+        3: "ERROR_PATH_NOT_FOUND — 경로 없음",
+        14001: "ERROR_SXS_CONFIGURATION — VC++ Redistributable 누락 가능성",
+    }
+    return hints.get(winerror, f"Windows error code {winerror}")
+
+
+def _preload_mvs_dll(mvs_import_path: str) -> tuple:
     """
-    MvCameraControl.dll을 ctypes로 직접 로드합니다 (전체 경로 + SetDllDirectoryW).
+    MvCameraControl.dll + Runtime 폴더 전체 DLL을 사전 로드합니다.
 
-    핵심 문제:
-      MvCameraControl_class.py line 77 → ctypes.CDLL('MvCameraControl.dll') 이름으로만 호출
-      PyInstaller 동결 EXE에서 os.add_dll_directory / PATH 변경은
-      Windows의 plain LoadLibrary 경로 탐색에 반영되지 않음.
+    PyInstaller frozen EXE에서 ctypes.CDLL('MvCameraControl.dll') 이름 호출이
+    실패하는 문제를 해결하기 위해, 강화된 다단계 전략 사용:
 
-    해결책:
-      kernel32.SetDllDirectoryW(runtime_dir) 를 호출하면 plain LoadLibrary도
-      해당 디렉토리에서 의존 DLL을 찾을 수 있음.
-      → 전체 경로로 WinDLL 로드 성공 → 프로세스 DLL 캐시 등록
-      → 이후 CDLL('MvCameraControl.dll') 이름만으로도 캐시에서 찾음.
+    1. Runtime 디렉토리 발견 (MvImport에서 역산)
+    2. SetDllDirectoryW + add_dll_directory + PATH 모두 등록
+    3. winmode=LOAD_WITH_ALTERED_SEARCH_PATH로 Runtime 폴더의 모든 DLL을 사전 로드
+       - 의존성 순서 무관 (Windows DLL loader가 캐시 재사용)
+       - LOAD_WITH_ALTERED_SEARCH_PATH(0x08): DLL의 디렉토리를 의존 DLL 탐색 첫 위치로
+    4. 최종 MvCameraControl.dll 단독 로드 확인
 
-    Returns: 로드 성공한 DLL 경로 또는 None
+    Returns: (성공 DLL 경로 or None, 진단 메시지 리스트)
     """
+    # winmode 플래그 (Python 3.8+에서 ctypes.WinDLL이 LoadLibraryExW에 전달)
+    LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008
+    LOAD_LIBRARY_SEARCH_DEFAULT_DIRS = 0x00001000
+    LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR = 0x00000100
+    LOAD_LIBRARY_SEARCH_USER_DIRS = 0x00000400
+    LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
+    _WINMODE = (
+        LOAD_WITH_ALTERED_SEARCH_PATH
+        | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+        | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
+        | LOAD_LIBRARY_SEARCH_USER_DIRS
+        | LOAD_LIBRARY_SEARCH_SYSTEM32
+    )
+
+    diag: List[str] = []
+    is_64bit = sys.maxsize > 2**32
+    diag.append(f"Python: {'64-bit' if is_64bit else '32-bit'} (sys.maxsize={sys.maxsize})")
+    diag.append(f"MvImport 경로: {mvs_import_path}")
+
     p = Path(mvs_import_path)
-    dll_names = ["MvCameraControl.dll", "MvCameraControl_d.dll"]
-    search_roots = []
+    target_dll_names = ["MvCameraControl.dll", "MvCameraControl_d.dll"]
+
+    search_roots: List[Path] = []
     if len(p.parents) > 3:
-        search_roots.append(p.parents[3])   # MVS_ROOT (표준: 4단계 위)
+        search_roots.append(p.parents[3])   # MVS_ROOT (표준)
     if len(p.parents) > 4:
-        search_roots.append(p.parents[4])   # 한 단계 더 위 (비표준 설치)
+        search_roots.append(p.parents[4])   # 비표준 설치
     search_roots.append(p)                  # MvImport 자체
 
     runtime_subdirs = [
@@ -232,13 +267,14 @@ def _preload_mvs_dll(mvs_import_path: str) -> Optional[str]:
         "",
     ]
 
+    # kernel32 — SetDllDirectoryW 용
     try:
         _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     except OSError:
         _kernel32 = None
+        diag.append("⚠ kernel32 로드 실패 — SetDllDirectoryW 사용 불가")
 
     def _set_dll_dir(path_str: Optional[str]) -> None:
-        """SetDllDirectoryW로 plain LoadLibrary 탐색 경로 설정/복원."""
         if _kernel32 is None:
             return
         try:
@@ -246,24 +282,110 @@ def _preload_mvs_dll(mvs_import_path: str) -> Optional[str]:
         except Exception:
             pass
 
+    # 1) Runtime 디렉토리 찾기 (MvCameraControl.dll 있는 곳)
+    runtime_dir: Optional[Path] = None
     for root in search_roots:
         for sub in runtime_subdirs:
             check_dir = root / sub if sub else root
-            for dll_name in dll_names:
-                dll_path = check_dir / dll_name
-                if dll_path.exists():
-                    # Runtime 디렉토리를 SetDllDirectoryW로 등록 →
-                    # MvCameraControl.dll 의존 DLL들이 여기서 탐색됨
-                    _set_dll_dir(str(check_dir))
-                    try:
-                        ctypes.WinDLL(str(dll_path))
-                        _set_dll_dir(None)   # 복원
-                        return str(dll_path)
-                    except OSError:
-                        pass
+            for dll_name in target_dll_names:
+                if (check_dir / dll_name).exists():
+                    runtime_dir = check_dir
+                    break
+            if runtime_dir:
+                break
+        if runtime_dir:
+            break
 
-    _set_dll_dir(None)   # 복원
-    return None
+    if runtime_dir is None:
+        diag.append("❌ MvCameraControl.dll을 어느 Runtime 디렉토리에서도 찾지 못함")
+        diag.append("탐색한 경로 (상위 5개):")
+        cnt = 0
+        for root in search_roots:
+            for sub in runtime_subdirs:
+                if cnt >= 5:
+                    break
+                d = root / sub if sub else root
+                diag.append(f"  - {d}  (exists={d.exists()})")
+                cnt += 1
+            if cnt >= 5:
+                break
+        return None, diag
+
+    diag.append(f"✓ Runtime 디렉토리: {runtime_dir}")
+
+    # 2) 모든 등록 메커니즘 동원
+    _set_dll_dir(str(runtime_dir))
+    try:
+        os.add_dll_directory(str(runtime_dir))
+    except (AttributeError, OSError):
+        pass
+    if str(runtime_dir) not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = str(runtime_dir) + os.pathsep + os.environ.get("PATH", "")
+
+    # 3) Runtime 폴더 전체 DLL 사전 로드 (의존성 순서 무관)
+    all_dlls = sorted(runtime_dir.glob("*.dll"))
+    diag.append(f"Runtime DLL 개수: {len(all_dlls)}개")
+
+    loaded_count = 0
+    error_samples: List[str] = []
+    for dll_file in all_dlls:
+        try:
+            ctypes.WinDLL(str(dll_file), winmode=_WINMODE)
+            loaded_count += 1
+        except OSError as e:
+            winerr = getattr(e, "winerror", None)
+            if len(error_samples) < 3:
+                error_samples.append(
+                    f"  {dll_file.name}: winerror={winerr} ({_winerror_hint(winerr)})"
+                )
+        except TypeError:
+            # Python 3.7 이하 — winmode 미지원 fallback
+            try:
+                ctypes.WinDLL(str(dll_file))
+                loaded_count += 1
+            except OSError as e:
+                winerr = getattr(e, "winerror", None)
+                if len(error_samples) < 3:
+                    error_samples.append(
+                        f"  {dll_file.name}: winerror={winerr} ({_winerror_hint(winerr)})"
+                    )
+
+    diag.append(f"사전 로드 성공: {loaded_count}/{len(all_dlls)}")
+    if error_samples:
+        diag.append("로드 실패 샘플:")
+        diag.extend(error_samples)
+
+    # 4) MvCameraControl.dll 단독 로드 확인 (winmode 강화)
+    for dll_name in target_dll_names:
+        dll_path = runtime_dir / dll_name
+        if not dll_path.exists():
+            continue
+        try:
+            ctypes.WinDLL(str(dll_path), winmode=_WINMODE)
+            diag.append(f"✅ {dll_name} 로드 성공")
+            # SetDllDirectoryW 유지 — MvCameraControl_class.py가
+            # 추가로 다른 DLL을 이름으로 부를 수 있으므로 복원하지 않음
+            return str(dll_path), diag
+        except OSError as e:
+            winerr = getattr(e, "winerror", None)
+            diag.append(
+                f"❌ {dll_name} winmode 로드 실패: "
+                f"winerror={winerr} ({_winerror_hint(winerr)})"
+            )
+        except TypeError:
+            # Python 3.7 이하 fallback
+            try:
+                ctypes.WinDLL(str(dll_path))
+                diag.append(f"✅ {dll_name} 로드 성공 (winmode 없이)")
+                return str(dll_path), diag
+            except OSError as e:
+                winerr = getattr(e, "winerror", None)
+                diag.append(
+                    f"❌ {dll_name} 로드 실패: "
+                    f"winerror={winerr} ({_winerror_hint(winerr)})"
+                )
+
+    return None, diag
 
 
 def _try_load_mvs(path: str) -> bool:
@@ -272,9 +394,10 @@ def _try_load_mvs(path: str) -> bool:
     # 1. Runtime DLL 디렉토리를 PATH / add_dll_directory에 추가
     _add_mvs_runtime_to_path(path)
 
-    # 2. MvCameraControl.dll을 전체 경로로 미리 로드
+    # 2. MvCameraControl.dll + 의존 DLL을 winmode=LOAD_WITH_ALTERED_SEARCH_PATH로 사전 로드
     #    (PyInstaller 동결 EXE에서 ctypes.CDLL('MvCameraControl.dll')이 실패하는 문제 방지)
-    preloaded = _preload_mvs_dll(path)
+    preloaded, diag_lines = _preload_mvs_dll(path)
+    diag_text = "\n".join(diag_lines)
 
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -289,7 +412,10 @@ def _try_load_mvs(path: str) -> bool:
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
-        preload_info = f"\n[DLL 사전 로드: {preloaded or '실패'}]"
+        preload_info = (
+            f"\n[DLL 사전 로드: {preloaded or '실패'}]"
+            f"\n[진단]\n{diag_text}"
+        )
         _MVS_IMPORT_ERROR = f"{e}{preload_info}\n\n[상세]\n{tb}"
         return False
 
