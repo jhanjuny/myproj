@@ -229,18 +229,22 @@ def _preload_mvs_dll(mvs_import_path: str) -> tuple:
     Returns: (성공 DLL 경로 or None, 진단 메시지 리스트)
     """
     # winmode 플래그 (Python 3.8+에서 ctypes.WinDLL이 LoadLibraryExW에 전달)
-    LOAD_WITH_ALTERED_SEARCH_PATH = 0x00000008
+    # 주의: LOAD_WITH_ALTERED_SEARCH_PATH(0x08)는 레거시 모드이고
+    #      LOAD_LIBRARY_SEARCH_*(0x100+)는 신규 모드 — 상호 배타적.
+    #      동시 지정 시 ERROR_INVALID_PARAMETER(87) 반환 가능.
+    # PyInstaller frozen 환경에서는 신규 모드 조합이 적합.
     LOAD_LIBRARY_SEARCH_DEFAULT_DIRS = 0x00001000
     LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR = 0x00000100
     LOAD_LIBRARY_SEARCH_USER_DIRS = 0x00000400
     LOAD_LIBRARY_SEARCH_SYSTEM32 = 0x00000800
     _WINMODE = (
-        LOAD_WITH_ALTERED_SEARCH_PATH
-        | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+        LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
         | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR
         | LOAD_LIBRARY_SEARCH_USER_DIRS
         | LOAD_LIBRARY_SEARCH_SYSTEM32
     )
+    # Fallback: 신규 모드 실패 시 레거시 모드 단독
+    _WINMODE_LEGACY = 0x00000008  # LOAD_WITH_ALTERED_SEARCH_PATH
 
     diag: List[str] = []
     is_64bit = sys.maxsize > 2**32
@@ -272,7 +276,7 @@ def _preload_mvs_dll(mvs_import_path: str) -> tuple:
         _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     except OSError:
         _kernel32 = None
-        diag.append("⚠ kernel32 로드 실패 — SetDllDirectoryW 사용 불가")
+        diag.append("[WARN] kernel32 로드 실패 - SetDllDirectoryW 사용 불가")
 
     def _set_dll_dir(path_str: Optional[str]) -> None:
         if _kernel32 is None:
@@ -297,7 +301,7 @@ def _preload_mvs_dll(mvs_import_path: str) -> tuple:
             break
 
     if runtime_dir is None:
-        diag.append("❌ MvCameraControl.dll을 어느 Runtime 디렉토리에서도 찾지 못함")
+        diag.append("[FAIL] MvCameraControl.dll을 어느 Runtime 디렉토리에서도 찾지 못함")
         diag.append("탐색한 경로 (상위 5개):")
         cnt = 0
         for root in search_roots:
@@ -311,7 +315,7 @@ def _preload_mvs_dll(mvs_import_path: str) -> tuple:
                 break
         return None, diag
 
-    diag.append(f"✓ Runtime 디렉토리: {runtime_dir}")
+    diag.append(f"[OK] Runtime 디렉토리: {runtime_dir}")
 
     # 2) 모든 등록 메커니즘 동원
     _set_dll_dir(str(runtime_dir))
@@ -326,65 +330,71 @@ def _preload_mvs_dll(mvs_import_path: str) -> tuple:
     all_dlls = sorted(runtime_dir.glob("*.dll"))
     diag.append(f"Runtime DLL 개수: {len(all_dlls)}개")
 
+    def _safe_load(dll_path_str: str) -> tuple:
+        """3단계 fallback: 신규 winmode → 레거시 winmode → 기본 호출.
+        Returns: (성공 여부, winerror or None, 메시지 or None)"""
+        # 1) 신규 LOAD_LIBRARY_SEARCH_* 조합
+        try:
+            ctypes.WinDLL(dll_path_str, winmode=_WINMODE)
+            return True, None, None
+        except TypeError:
+            # Python 3.7 이하 — winmode 미지원
+            try:
+                ctypes.WinDLL(dll_path_str)
+                return True, None, None
+            except Exception as e:
+                return False, getattr(e, "winerror", None), str(e)
+        except Exception as e1:
+            # 2) winerror=87이면 레거시 모드로 retry
+            winerr1 = getattr(e1, "winerror", None)
+            if winerr1 == 87:
+                try:
+                    ctypes.WinDLL(dll_path_str, winmode=_WINMODE_LEGACY)
+                    return True, None, None
+                except Exception as e2:
+                    pass
+            # 3) 마지막 fallback: 기본 호출
+            try:
+                ctypes.WinDLL(dll_path_str)
+                return True, None, None
+            except Exception as e3:
+                return False, getattr(e3, "winerror", winerr1), str(e3)
+
     loaded_count = 0
     error_samples: List[str] = []
     for dll_file in all_dlls:
-        try:
-            ctypes.WinDLL(str(dll_file), winmode=_WINMODE)
+        ok, winerr, msg = _safe_load(str(dll_file))
+        if ok:
             loaded_count += 1
-        except OSError as e:
-            winerr = getattr(e, "winerror", None)
-            if len(error_samples) < 3:
-                error_samples.append(
-                    f"  {dll_file.name}: winerror={winerr} ({_winerror_hint(winerr)})"
-                )
-        except TypeError:
-            # Python 3.7 이하 — winmode 미지원 fallback
-            try:
-                ctypes.WinDLL(str(dll_file))
-                loaded_count += 1
-            except OSError as e:
-                winerr = getattr(e, "winerror", None)
-                if len(error_samples) < 3:
-                    error_samples.append(
-                        f"  {dll_file.name}: winerror={winerr} ({_winerror_hint(winerr)})"
-                    )
+        elif len(error_samples) < 3:
+            error_samples.append(
+                f"  {dll_file.name}: winerror={winerr} ({_winerror_hint(winerr)})"
+            )
 
     diag.append(f"사전 로드 성공: {loaded_count}/{len(all_dlls)}")
     if error_samples:
         diag.append("로드 실패 샘플:")
         diag.extend(error_samples)
 
-    # 4) MvCameraControl.dll 단독 로드 확인 (winmode 강화)
+    # 4) MvCameraControl.dll 단독 로드 확인 (winmode 강화 + fallback)
     for dll_name in target_dll_names:
         dll_path = runtime_dir / dll_name
         if not dll_path.exists():
             continue
-        try:
-            ctypes.WinDLL(str(dll_path), winmode=_WINMODE)
-            diag.append(f"✅ {dll_name} 로드 성공")
-            # SetDllDirectoryW 유지 — MvCameraControl_class.py가
-            # 추가로 다른 DLL을 이름으로 부를 수 있으므로 복원하지 않음
+        ok, winerr, msg = _safe_load(str(dll_path))
+        if ok:
+            diag.append(f"[OK] {dll_name} 로드 성공")
+            # SetDllDirectoryW 복원 — 다른 모듈(PyQt5, OpenCV)의 DLL 탐색 영향 방지.
+            # 이미 사전 로드된 DLL들은 OS 캐시에 남아 있어 이름 호출 시 재사용됨.
+            _set_dll_dir(None)
             return str(dll_path), diag
-        except OSError as e:
-            winerr = getattr(e, "winerror", None)
+        else:
             diag.append(
-                f"❌ {dll_name} winmode 로드 실패: "
+                f"[FAIL] {dll_name} 로드 실패: "
                 f"winerror={winerr} ({_winerror_hint(winerr)})"
             )
-        except TypeError:
-            # Python 3.7 이하 fallback
-            try:
-                ctypes.WinDLL(str(dll_path))
-                diag.append(f"✅ {dll_name} 로드 성공 (winmode 없이)")
-                return str(dll_path), diag
-            except OSError as e:
-                winerr = getattr(e, "winerror", None)
-                diag.append(
-                    f"❌ {dll_name} 로드 실패: "
-                    f"winerror={winerr} ({_winerror_hint(winerr)})"
-                )
 
+    _set_dll_dir(None)   # 실패 시에도 복원
     return None, diag
 
 
