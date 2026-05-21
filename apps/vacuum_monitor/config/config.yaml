@@ -161,7 +161,7 @@ rois:
 
 readout:
   engine: tesseract
-  tesseract_cmd: "C:/Users/hanjunpy/AppData/Local/Programs/Tesseract-OCR/tesseract.exe"
+  tesseract_cmd: "C:/Users/user_ESC/miniconda3/envs/torch/Library/bin/tesseract.exe"
   psm: 7
   whitelist: "0123456789eE+-."
 

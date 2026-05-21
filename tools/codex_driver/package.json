@@ -1,0 +1,9 @@
+{
+  "name": "codex-driver",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "PTY driver: automates Codex interactive TUI via simulated keyboard input",
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  }
+}
