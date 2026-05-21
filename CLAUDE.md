@@ -24,6 +24,12 @@
 - `conda activate` 대신 직접 인터프리터 경로를 사용한다.
 - 기본 Python 경로: `D:\conda_envs\torch\python.exe`
 
+### 예외: apps/paper_analyzer
+
+- `apps/paper_analyzer/` 관련 작업은 **로컬 머신**에서 실행한다.
+- Python 경로: `C:\Users\hanjunpy\anaconda3\python.exe`
+- 실행 위치: `C:\Users\hanjunpy\ml\projects\myproj\apps\paper_analyzer\`
+
 ## 테스트 정책
 
 코드 변경 후 프로젝트 성격에 맞는 검증을 실행한다:
