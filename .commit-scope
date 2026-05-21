@@ -10,3 +10,8 @@ rthook_pil.py
 CLAUDE.md
 apps/gmail_ai/credentials.json
 apps/shortform_factory/client_secret.json
+.commit-scope
+build/
+dist/
+experiments/
+tools/
