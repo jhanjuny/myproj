@@ -1,0 +1,45 @@
+# apps/VV1/config.yaml — VV1 오프라인 정량분석 기본값
+#
+# VV1은 apps/rheed_monitor의 실시간 모니터링과 완전히 분리된 "오프라인 배치
+# 정량분석" 도구입니다. 이미 녹화된 동영상 파일(.mp4/.avi)을 열어
+#   - ROI 자동추적(EMA)
+#   - 스트립 프로파일 3-피크 검출(specular + 1차 회절 스트릭 2개)
+#   - 격자상수 d(t) [Å]  (파장·카메라거리 캘리브레이션 필요)
+#   - 스트릭 FWHM → apparent in-plane coherence length [Å]
+#   - ROI 강도 시계열 정규화 + FFT → 성장률 [ML/s, Å/s]
+# 를 계산하고 결과를 zip으로 압축 저장합니다. 실행 트리거는 "정량분석 실행 &
+# 압축저장" 버튼 하나뿐이며, 실시간 미리보기/그래프는 없습니다.
+
+detector:
+  threshold_fraction: 0.5     # max 밝기 대비 스팟 임계값 비율
+  min_brightness: 20.0        # 이 값 미만이면 스팟 없음
+  min_area: 4                 # 최소 픽셀 면적
+  broad_area_threshold: 500   # 이 이상이면 broad 패턴으로 분류
+  max_spots: 10
+  blur_ksize: 5
+
+roi:
+  size_px: 120                # ROI 반변 길이 — specular + 1차 스트릭 2개가 모두
+                               # 들어와야 하므로 rheed_monitor 라이브 앱 기본값(40)보다 큼
+  track_alpha: 0.3            # EMA 추적 계수 (rheed_monitor와 동일 로직)
+
+calibration:
+  accel_voltage_kv: 20.0      # 가속전압 (kV) — 전자파장 계산에 사용
+  camera_length_cm: 10.5      # 시료-스크린 거리 (cm)
+  screen_diameter_cm: 4.98    # 형광스크린 실제 지름 (cm) — 화면기준 스케일 산출용
+  scale_cm_px: 0.0            # cm/px 픽셀 스케일. 0 = 미설정
+                               # (기준물질/존으로 산출하거나 직접 입력해야 Å 단위 산출 가능)
+  layer_thickness_angstrom: 3.905  # 1 monolayer당 층 두께 (Å) — Å/s 성장률 환산용
+  reference_material: ""      # 예: SrTiO3 (materials.py 참조)
+  reference_zone: ""          # 예: 110
+
+background:
+  method: als                 # als | rolling_ball | polynomial | moving_min | none
+  als_lambda: 100000.0
+  als_p: 0.01
+
+spectra:
+  detrend: ema                # ema | linear | mean
+  ema_alpha: 0.15
+  normalize: true             # 디트렌드 후 강도 시계열을 최대진폭=1로 정규화한 뒤 FFT
+  frame_normalize: false      # 프레임별 그린채널 min-max 정규화(노출값 편차 보정용)
