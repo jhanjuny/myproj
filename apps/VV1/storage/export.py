@@ -17,7 +17,7 @@ def write_lattice_csv(path: Path, records: List[Dict]) -> None:
           d_angstrom, fwhm_px, coherence_angstrom, roi_mean_intensity
     """
     fieldnames = [
-        "frame", "t_sec", "roi_cx", "roi_cy", "dx_px",
+        "frame", "t_sec", "roi_source", "roi_cx", "roi_cy", "dx_px",
         "specular_x", "left_x", "right_x",
         "d_angstrom", "fwhm_px", "coherence_angstrom", "roi_mean_intensity",
     ]

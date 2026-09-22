@@ -19,8 +19,24 @@ from PyQt5.QtWidgets import QApplication
 from apps.VV1.gui.main_window import MainWindow
 
 
+def _resolve_config() -> Path:
+    """
+    EXE로 실행 시: PyInstaller onefile 엔트리스크립트는 패키지 경로가 보존되지
+    않고 MEIPASS 루트에 풀리므로 __file__ 기준 상대경로가 깨진다 — apps/rheed_monitor
+    /main.py의 _resolve_config()와 동일한 패턴으로 sys._MEIPASS를 직접 사용한다.
+    EXE 옆에 VV1_config.yaml이 있으면 그걸 우선(재빌드 없이 설정 수정 가능).
+    """
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        runtime = exe_dir / "VV1_config.yaml"
+        if runtime.exists():
+            return runtime
+        return Path(sys._MEIPASS) / "apps/VV1/config.yaml"
+    return REPO_ROOT / "apps/VV1/config.yaml"
+
+
 def main() -> None:
-    cfg_path = Path(__file__).resolve().parent / "config.yaml"
+    cfg_path = _resolve_config()
     cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
 
     app = QApplication(sys.argv)

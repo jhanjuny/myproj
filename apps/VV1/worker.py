@@ -137,18 +137,25 @@ class BatchAnalysisWorker(QThread):
             h, w = frame.shape[:2]
             t_sec = idx / fps if fps > 0 else float(idx)
 
-            # 1) ROI 위치: CSV 궤적 우선, 없으면 SpotDetector+EMA 자동추적
+            # 1) ROI 위치: CSV 궤적 우선, 없으면 SpotDetector+EMA 자동추적.
+            #    CSV가 비디오보다 짧아 도중에 소진되면 자동추적으로 넘어가되,
+            #    그 사실이 로그(roi_source 컬럼)에 남도록 조용히 섞이지 않게 함.
             center = None
             csv_intensity = None
+            frame_roi_source = None
             if csv_traj is not None and idx < len(csv_traj) and csv_traj[idx] is not None:
                 cx, cy, csv_intensity = csv_traj[idx]
                 center = (cx, cy)
+                frame_roi_source = "csv"
             else:
                 spots = detector.detect(frame, frame_normalize=self.frame_normalize)
                 center = tracker.update(spots)
+                if center is not None:
+                    frame_roi_source = "csv_exhausted_auto" if csv_traj is not None else "auto"
 
             record = {
                 "frame": idx, "t_sec": round(t_sec, 4),
+                "roi_source": frame_roi_source,
                 "roi_cx": None, "roi_cy": None, "dx_px": None,
                 "specular_x": None, "left_x": None, "right_x": None,
                 "d_angstrom": None, "fwhm_px": None, "coherence_angstrom": None,
@@ -217,11 +224,26 @@ class BatchAnalysisWorker(QThread):
         d_vals = [r["d_angstrom"] for r in records if r["d_angstrom"] is not None]
         coh_vals = [r["coherence_angstrom"] for r in records if r["coherence_angstrom"] is not None]
 
+        n_csv = sum(1 for r in records if r["roi_source"] == "csv")
+        n_auto_fallback = sum(1 for r in records if r["roi_source"] == "csv_exhausted_auto")
+        n_auto = sum(1 for r in records if r["roi_source"] == "auto")
+        if csv_traj is None:
+            roi_source_summary = "auto-track(SpotDetector+EMA)"
+        elif n_auto_fallback == 0:
+            roi_source_summary = "spot_data.csv"
+        else:
+            roi_source_summary = (
+                f"spot_data.csv({n_csv} frames) + auto-track fallback({n_auto_fallback} frames) "
+                f"— csv had only {len(csv_traj)} rows for {total} video frames"
+            )
+
         summary = {
             "video": str(self.video_path),
             "n_frames_total": total,
             "n_frames_with_roi": len(intensities),
-            "roi_source": "spot_data.csv" if csv_traj is not None else "auto-track(SpotDetector+EMA)",
+            "n_frames_csv_tracked": n_csv,
+            "n_frames_auto_tracked": n_auto + n_auto_fallback,
+            "roi_source": roi_source_summary,
             "calibration": {
                 "accel_voltage_kv": self.v_kev,
                 "camera_length_cm": self.l_cm,
