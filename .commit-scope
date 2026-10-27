@@ -15,3 +15,4 @@ build/
 dist/
 experiments/
 tools/
+apps/arpes_be_calculator/
