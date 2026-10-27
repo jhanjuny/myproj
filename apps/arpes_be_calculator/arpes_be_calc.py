@@ -32,7 +32,7 @@ def parse_float(s):
 
 def ask_float(prompt, default=None, min_value=None):
     while True:
-        s = input(prompt).strip()
+        s = input(prompt).strip().lstrip("﻿")
         if not s and default is not None:
             return default
         v = parse_float(s)
@@ -94,7 +94,7 @@ def main():
 
     while True:
         try:
-            s = input("E_kin (eV) > ").strip()
+            s = input("E_kin (eV) > ").strip().lstrip("﻿")
         except (EOFError, KeyboardInterrupt):
             break
         if s.lower() in ("q", "quit", "exit"):

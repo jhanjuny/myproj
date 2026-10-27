@@ -1,4 +1,7 @@
 @echo off
 chcp 65001 > nul
-"D:\conda_envs\torch\python.exe" "%~dp0arpes_be_calc.py"
+set "PY=C:\Users\hanjunpy\anaconda3\python.exe"
+if not exist "%PY%" set "PY=D:\conda_envs\torch\python.exe"
+if not exist "%PY%" set "PY=python"
+"%PY%" "%~dp0arpes_be_calc.py"
 pause
