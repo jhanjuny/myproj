@@ -5,6 +5,7 @@ Loop:     enter electron kinetic energy E_kin ->
           E_B = hv - phi - E_kin, core-level candidates within tolerance,
           2nd-order light candidates (2hv), nearest level of pinned elements.
 """
+import math
 import sys
 
 from binding_energies import BINDING_ENERGIES
@@ -20,15 +21,27 @@ LEVELS = sorted(
 )
 
 
-def ask_float(prompt, default=None):
+def parse_float(s):
+    """Finite float or None (rejects text, nan, inf)."""
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return v if math.isfinite(v) else None
+
+
+def ask_float(prompt, default=None, min_value=None):
     while True:
         s = input(prompt).strip()
         if not s and default is not None:
             return default
-        try:
-            return float(s)
-        except ValueError:
+        v = parse_float(s)
+        if v is None:
             print("  숫자를 입력하세요.")
+        elif min_value is not None and v < min_value:
+            print(f"  {min_value} 이상의 값을 입력하세요.")
+        else:
+            return v
 
 
 def candidates(eb, tol):
@@ -75,7 +88,7 @@ def main():
     print("=" * 64)
     hv = ask_float(" Photon energy hv (eV): ")
     phi = ask_float(" Work function phi (eV): ")
-    tol = ask_float(f" Tolerance ± (eV) [Enter = {DEFAULT_TOL}]: ", DEFAULT_TOL)
+    tol = ask_float(f" Tolerance ± (eV) [Enter = {DEFAULT_TOL}]: ", DEFAULT_TOL, min_value=0)
     print(f"\n hv = {hv} eV, phi = {phi} eV, tol = ±{tol} eV  (변경하려면 재시작)")
     print(" E_kin 입력 (종료: q)\n")
 
@@ -88,9 +101,8 @@ def main():
             break
         if not s:
             continue
-        try:
-            ekin = float(s)
-        except ValueError:
+        ekin = parse_float(s)
+        if ekin is None:
             print("  숫자를 입력하세요.")
             continue
         report(ekin, hv, phi, tol)
